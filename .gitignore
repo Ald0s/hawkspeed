@@ -1,0 +1,35 @@
+# Useless directories
+venv/
+__pycache__/
+*egg-info/
+
+# Private dirs
+private/
+docs/
+instance/
+exports/
+servercfg/
+
+# Private files
+.env
+
+# Database.
+*.db
+
+# Compiled python files
+*.pyc
+
+# Batch & script files.
+*.bat
+
+# APK files.
+*.apk
+
+# Log files
+*.log
+
+# Pipfile.
+Pipfile.lock
+
+# Package lock.
+package-lock.json
