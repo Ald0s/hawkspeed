@@ -33,6 +33,14 @@ class AccountActionNeeded(Exception):
         self.action_needed_category_code = _action_needed_category_code
 
 
+class TrackAlreadyExists(Exception):
+    pass
+
+
+class TrackPathIntersectsExistingTrack(Exception):
+    pass
+
+
 class RaceDisqualifiedError(Exception):
     def __init__(self, user, track_user_race, **kwargs):
         self.user = user

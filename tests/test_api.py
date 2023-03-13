@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta
 from flask import url_for
 from tests.conftest import BaseAPICase
 
-from app import db, config, factory, models, login_manager
+from app import db, config, factory, models, login_manager, tracks
 
 
 class TestLoginLogout(BaseAPICase):
@@ -257,3 +257,28 @@ class TestRegistrationAndSetup(BaseAPICase):
             self.assertEqual(aldos.bio, "This is a bio.")
             # Finally, confirm that profile is setup.
             self.assertEqual(account_d["profile_setup"], True)
+
+
+class TestTrackAPI(BaseAPICase):
+    def test_query_track_path(self):
+        """Import a test GPX route.
+        Create a new User.
+        Perform a query for the track's path.
+        Ensure request was successful, UIDs matched and the number of points is not 0."""
+        # Create a new User.
+        aldos = factory.create_user("alden@mail.com", "password",
+            username = "alden", verified = True)
+        # Test that we can load a track from GPX.
+        track_from_gpx = tracks.create_track_from_gpx("example1.gpx",
+            intersection_check = False)
+        db.session.flush()
+        # Now that we're here, start a test client and log aldos in.
+        with self.app.test_client(user = aldos) as client:
+            track_path_response = client.get(url_for("api.get_track_path", track_uid = track_from_gpx.uid))
+            # Ensure this request was successful.
+            self.assertEqual(track_path_response.status_code, 200)
+            track_path_json = track_path_response.json
+            # Ensure the UID matches.
+            self.assertEqual(track_path_json["track_uid"], track_from_gpx.uid)
+            # Ensure there are more than 0 points in the response.
+            self.assertNotEqual(len(track_path_json["points"]), 0)

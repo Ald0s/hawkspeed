@@ -142,7 +142,7 @@ def setup_profile(**kwargs):
         raise e
 
 
-@api.route("/api/v1/track/<uid_track>", methods = [ "GET" ])
+@api.route("/api/v1/track/<track_uid>", methods = [ "GET" ])
 @decorators.account_setup_required()
 @decorators.get_track(should_belong_to_user = False)
 def get_track(track, **kwargs):
@@ -156,7 +156,7 @@ def get_track(track, **kwargs):
         raise e
 
 
-@api.route("/api/v1/track/<uid_track>/path", methods = [ "GET" ])
+@api.route("/api/v1/track/<track_uid>/path", methods = [ "GET" ])
 @decorators.account_setup_required()
 @decorators.get_track(should_belong_to_user = False)
 def get_track_path(track, **kwargs):
@@ -193,7 +193,7 @@ def new_track(**kwargs):
         raise e
 
 
-@api.route("/api/v1/track/<uid_track>/manage", methods = [ "GET", "POST", "DELETE" ])
+@api.route("/api/v1/track/<track_uid>/manage", methods = [ "GET", "POST", "DELETE" ])
 @decorators.account_setup_required()
 @decorators.get_track(should_belong_to_user = True)
 def manage_track(track, **kwargs):

@@ -38,6 +38,59 @@ class BaseViewportUpdateSchema(Schema):
     viewport_maxy           = fields.Decimal(as_string = True, required = True)
 
 
+class Viewport():
+    """An object that will represent a Player's current viewport, and will handle transforming it."""
+    @property
+    def polygon(self):
+        """TODO: polygons generated from this property tend to be on an angle. Research this. Though, this is fixed if we manually add the other two corners, as alternative
+        combinations of the existing two points."""
+        return shapely.geometry.box(*self.min_pt.coords[0], *self.max_pt.coords[0])
+
+    def __init__(self, _viewport_update_d, **kwargs):
+        """This constructor requires a dictionary loaded with a schema that is a derivative of the BaseViewportUpdateSchema schema."""
+        # Read all relevant values from the schema.
+        # From these, construct two Shapely points, from the min and max points, that are also transformed appropriately.
+        min_pt = shapely.geometry.Point(_viewport_update_d.get("viewport_minx"), _viewport_update_d.get("viewport_miny"))
+        max_pt = shapely.geometry.Point(_viewport_update_d.get("viewport_maxx"), _viewport_update_d.get("viewport_maxy"))
+        self.min_pt = shapely.ops.transform(transformer.transform, min_pt)
+        self.max_pt = shapely.ops.transform(transformer.transform, max_pt)
+
+
+class ViewportUpdateResult():
+    @property
+    def tracks(self):
+        return self._tracks
+
+    def __init__(self, tracks, **kwargs):
+        self._tracks = tracks
+
+
+def collect_viewed_objects(user, base_viewport_d, **kwargs) -> ViewportUpdateResult:
+    """Given a User, and a dictionary that should have been loaded with a schema that is a derivative of the BaseViewportUpdateSchema schema, attempt to locate all
+    world objects in view of that viewport, and report them in the given result.
+
+    Arguments
+    ---------
+    :user: The User for whom to collect objects.
+    :base_viewport_d: A dictionary that should have been loaded with a schema that is a derivative of BaseViewportUpdateSchema.
+
+    Returns
+    -------
+    A ViewportUpdateResult, which is a summary report of those objects."""
+    try:
+        # Instante a new viewport object here.
+        viewport = Viewport(base_viewport_d)
+        viewport_polygon = viewport.polygon
+        # Collect all tracks in view. Keep in mind, all geometries here are in the designated CRS.
+        tracks_in_view = db.session.query(models.Track)\
+            .filter(func.ST_Contains(shape.from_shape(viewport_polygon, srid = config.WORLD_CONFIGURATION_CRS), models.Track.point_geom))\
+            .all()
+        # Create a viewed objects result and return it.
+        return ViewportUpdateResult(tracks_in_view)
+    except Exception as e:
+        raise e
+
+
 class BasePlayerUpdateSchema(Schema):
     """A schema that represents a general update to the player's location (and viewport.) This is to be sent whenever the player intends to join the world, or every time
     the player's device emits a location update."""
@@ -54,17 +107,6 @@ class BasePlayerUpdateSchema(Schema):
 
 class PlayerJoinResult():
     """"""
-    class PlayerJoinResultSchema(Schema):
-        """"""
-        class Meta:
-            unknown = EXCLUDE
-        uid                     = fields.Str(data_key = "player_uid")
-        latitude                = fields.Decimal(as_string = True, required = True)
-        longitude               = fields.Decimal(as_string = True, required = True)
-        rotation                = fields.Decimal(as_string = True, required = True)
-        # Now, all objects within the player's view.
-        tracks                  = fields.List(fields.Nested(tracks.TrackSummarySchema, many = False))
-
     @property
     def uid(self):
         return self._user.uid
@@ -81,14 +123,14 @@ class PlayerJoinResult():
     def rotation(self):
         return self._user_location.rotation
 
-    def serialise(self, **kwargs):
-        schema = self.PlayerJoinResultSchema(**kwargs)
-        return schema.dump(self)
+    @property
+    def viewport_update(self):
+        return self._viewport_update_result
 
-    def __init__(self, user, user_location, viewed_objects):
+    def __init__(self, user, user_location, viewport_update_result = None):
         self._user = user
         self._user_location = user_location
-        self._viewed_objects = viewed_objects
+        self._viewport_update_result = viewport_update_result
 
 
 def parse_player_joined(user, connect_d, **kwargs) -> PlayerJoinResult:
@@ -109,13 +151,15 @@ def parse_player_joined(user, connect_d, **kwargs) -> PlayerJoinResult:
         user_location = _prepare_user_location(connect_d)
         """TODO: some extra details here."""
         # Now, collect the objects in view for this User & their current viewport.
-        world_objects_result = collect_viewed_objects(user, connect_d)
+        viewport_update_result = collect_viewed_objects(user, connect_d)
         # Add the user location to this User's history.
         user.add_location(user_location)
+        # Flush session so user location is given an ID.
+        db.session.flush()
         # Trim the User's location history to ensure they retain just enough.
         _trim_player_location_history(user)
         # Create and return a player join result.
-        return PlayerJoinResult(user, user_location)
+        return PlayerJoinResult(user, user_location, viewport_update_result)
     except Exception as e:
         """TODO: handle _ensure_location_supported raising exception."""
         raise e
@@ -123,15 +167,6 @@ def parse_player_joined(user, connect_d, **kwargs) -> PlayerJoinResult:
 
 class PlayerUpdateResult():
     """"""
-    class PlayerUpdateResponseSchema(Schema):
-        """"""
-        uid                     = fields.Str(data_key = "player_uid")
-        latitude                = fields.Decimal(as_string = True, required = True)
-        longitude               = fields.Decimal(as_string = True, required = True)
-        rotation                = fields.Decimal(as_string = True, required = True)
-        # Now, all objects within the player's view.
-        tracks                  = fields.List(fields.Nested(tracks.TrackSummarySchema, many = False))
-
     @property
     def uid(self):
         return self._user.uid
@@ -149,17 +184,17 @@ class PlayerUpdateResult():
         return self._user_location.rotation
 
     @property
+    def viewport_update(self):
+        return self._viewport_update_result
+
+    @property
     def user_location(self):
         return self._user_location
 
-    def serialise(self, **kwargs):
-        schema = self.PlayerUpdateResponseSchema(**kwargs)
-        return schema.dump(self)
-
-    def __init__(self, user, user_location, viewed_objects):
+    def __init__(self, user, user_location, viewport_update_result = None):
         self._user = user
         self._user_location = user_location
-        self._viewed_objects = viewed_objects
+        self._viewport_update_result = viewport_update_result
 
 
 def parse_player_update(user, player_update_d, **kwargs) -> PlayerUpdateResult:
@@ -177,8 +212,10 @@ def parse_player_update(user, player_update_d, **kwargs) -> PlayerUpdateResult:
     A PlayerUpdateResult, which can be serialised to result in the update result."""
     try:
         # Prepare a UserLocation from the given information.
-        user_location = _prepare_user_location(connect_d)
+        user_location = _prepare_user_location(player_update_d)
         """TODO: some extra details here."""
+        # Now, collect the objects in view for this User & their current viewport.
+        viewport_update_result = collect_viewed_objects(user, player_update_d)
         # Add the user location to this User's history.
         user.add_location(user_location)
         # Flush user location so that it is given an ID.
@@ -186,60 +223,7 @@ def parse_player_update(user, player_update_d, **kwargs) -> PlayerUpdateResult:
         # Trim the User's location history to ensure they retain just enough.
         _trim_player_location_history(user)
         # Create and return a player update result.
-        return PlayerUpdateResult(user, user_location)
-    except Exception as e:
-        raise e
-
-
-class Viewport():
-    """An object that will represent a Player's current viewport, and will handle transforming it."""
-    @property
-    def polygon(self):
-        """TODO: polygons generated from this property tend to be on an angle. Research this. Though, this is fixed if we manually add the other two corners, as alternative
-        combinations of the existing two points."""
-        return shapely.geometry.box(*self.min_pt.coords[0], *self.max_pt.coords[0])
-
-    def __init__(self, _viewport_update_d, **kwargs):
-        """This constructor requires a dictionary loaded with a schema that is a derivative of the BaseViewportUpdateSchema schema."""
-        # Read all relevant values from the schema.
-        # From these, construct two Shapely points, from the min and max points, that are also transformed appropriately.
-        min_pt = shapely.geometry.Point(_viewport_update_d.get("viewport_minx"), _viewport_update_d.get("viewport_miny"))
-        max_pt = shapely.geometry.Point(_viewport_update_d.get("viewport_maxx"), _viewport_update_d.get("viewport_maxy"))
-        self.min_pt = shapely.ops.transform(transformer.transform, min_pt)
-        self.max_pt = shapely.ops.transform(transformer.transform, max_pt)
-
-
-class ViewedObjectsResult():
-    @property
-    def tracks(self):
-        return self._tracks
-
-    def __init__(self, tracks, **kwargs):
-        self._tracks = tracks
-
-
-def collect_viewed_objects(user, base_viewport_d, **kwargs) -> ViewedObjectsResult:
-    """Given a User, and a dictionary that should have been loaded with a schema that is a derivative of the BaseViewportUpdateSchema schema, attempt to locate all
-    world objects in view of that viewport, and report them in the given result.
-
-    Arguments
-    ---------
-    :user: The User for whom to collect objects.
-    :base_viewport_d: A dictionary that should have been loaded with a schema that is a derivative of BaseViewportUpdateSchema.
-
-    Returns
-    -------
-    A ViewedObjectsResult, which is a summary report of those objects."""
-    try:
-        # Instante a new viewport object here.
-        viewport = Viewport(base_viewport_d)
-        viewport_polygon = viewport.polygon
-        # Collect all tracks in view.
-        tracks_in_view = db.session.query(models.Track)\
-            .filter(func.ST_Contains(shape.from_shape(viewport_polygon, srid = config.WORLD_CONFIGURATION_CRS), models.Track.point_geom))\
-            .all()
-        # Create a viewed objects result and return it.
-        return ViewedObjectsResult(tracks_in_view)
+        return PlayerUpdateResult(user, user_location, viewport_update_result)
     except Exception as e:
         raise e
 

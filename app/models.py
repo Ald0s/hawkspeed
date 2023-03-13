@@ -35,42 +35,6 @@ LOG = logging.getLogger("hawkspeed.models")
 LOG.setLevel( logging.DEBUG )
 
 
-class ProvideUUIDMixin():
-    """Provide implementing classes with a UUID that will be generated if not given."""
-    __uid__ = db.Column(compat.UUID(as_uuid = True), unique = True, default = uuid.uuid4)
-
-    @hybrid_property
-    def uid(self):
-        try:
-            return self.__uid__.hex.lower()
-        except Exception as e:
-            self.__uid__ = uuid.uuid4()
-            return self.__uid__.hex.lower()
-
-    @uid.expression
-    def uid(cls):
-        if not cls.__uid__:
-            return None
-        return func.lower(func.HEX(cls.__uid__))
-
-    @uid.setter
-    def uid(self, value):
-        if not value:
-            self.__uid__ = uuid.uuid4()
-        else:
-            self.__uid__ = uuid.UUID(value)
-
-    @classmethod
-    def get_by_uid(cls, uid):
-        if not uid:
-            return None
-        _uid = uid.replace("-", "").lower()
-
-        return with_polymorphic(cls, "*").query\
-            .filter(cls.uid == _uid)\
-            .first()
-
-
 class EPSGWrapperMixin():
     """Mixin for enabling geodetic transformation on objects."""
     @property
@@ -205,7 +169,71 @@ class MultiPolygonGeometryMixin(EPSGWrapperMixin):
         self.multi_polygon = multi_polygon
 
 
-class TrackUserRace(db.Model, ProvideUUIDMixin):
+class LineStringGeometryMixin(EPSGWrapperMixin):
+    """Enables all subclasses to own an arbitrary LineString geometry."""
+    @declared_attr
+    def linestring_geom(self):
+        """Represents a column for a geometry of type LineString."""
+        return db.Column(Geometry("LINESTRING", srid = config.WORLD_CONFIGURATION_CRS, management = config.POSTGIS_MANAGEMENT))
+
+    @property
+    def linestring(self) -> geometry.LineString:
+        if not self.linestring_geom:
+            return None
+        return shape.to_shape(self.linestring_geom)
+
+    @linestring.setter
+    def linestring(self, value):
+        if not value:
+            self.linestring_geom = None
+        else:
+            if not self.crs:
+                raise Exception("No CRS set! We can't set this linestring geom.")
+            self.linestring_geom = shape.from_shape(value, srid = self.crs)
+
+    @property
+    def geodetic_linestring(self):
+        return ops.transform(self.geodetic_transformer.transform, self.linestring)
+
+    def set_geometry(self, linestring):
+        if not self.crs:
+            raise AttributeError(f"Could not set geometry for {self}, this object does not have a CRS set!")
+        self.linestring = linestring
+
+
+class MultiLineStringGeometryMixin(EPSGWrapperMixin):
+    """Enables subclasses to own a MultiLineString geometry."""
+    @declared_attr
+    def multi_linestring_geom(self):
+        """Represents a column for a geometry of type MultiLineString."""
+        return db.Column(Geometry("MULTILINESTRING", srid = config.WORLD_CONFIGURATION_CRS, management = config.POSTGIS_MANAGEMENT))
+
+    @property
+    def multi_linestring(self) -> geometry.MultiLineString:
+        if not self.multi_linestring_geom:
+            return None
+        return shape.to_shape(self.multi_linestring_geom)
+
+    @multi_linestring.setter
+    def multi_linestring(self, value):
+        if not value:
+            self.multi_linestring_geom = None
+        else:
+            if not self.crs:
+                raise NotImplementedError("No CRS set! We can't set this multilinestring geom.")
+            self.multi_linestring_geom = shape.from_shape(value, srid = self.crs)
+
+    @property
+    def geodetic_multi_linestring(self):
+        return ops.transform(self.geodetic_transformer.transform, self.multi_linestring)
+
+    def set_geometry(self, multi_linestring):
+        if not self.crs:
+            raise AttributeError(f"Could not set geometry for {self}, this object does not have a CRS set!")
+        self.multi_linestring = multi_linestring
+
+
+class TrackUserRace(db.Model):
     """An association object between the Track model and the User model that represents a race completed by the User. This is a model that is created as soon as the User
     engages in a Race, and will enter the complete state once the server is happy the track was actually raced. Alternatively, if the race is determined to be interrupted,
     the fledgling association will be deleted. There can only be one incomplete race for one User at any time. Starting a new race will delete any currently incomplete races
@@ -215,6 +243,7 @@ class TrackUserRace(db.Model, ProvideUUIDMixin):
     track_id                = db.Column(db.Integer, db.ForeignKey("track.id", ondelete = "CASCADE"), primary_key = True, nullable = False)
     user_id                 = db.Column(db.Integer, db.ForeignKey("user_.id", ondelete = "CASCADE"), primary_key = True, nullable = False)
 
+    uid                     = db.Column(db.String(65), unique = True, default = lambda: uuid.uuid4().hex.lower())
     # When this race was started. This is said to be when the User's client communicates their intent to begin the race. Can't be None.
     started                 = db.Column(db.BigInteger, nullable = False, default = time.time)
     # When this race was completed. This is said to be when the server determines the race was completed successfully.
@@ -257,7 +286,7 @@ class TrackUserRace(db.Model, ProvideUUIDMixin):
         """Setting the track and user."""
         self.track = track
         self.user = user
-        
+
     def set_finished(self, time_finished):
         """Set this race to finished."""
         self.finished = time_finished
@@ -267,8 +296,8 @@ class TrackUserRace(db.Model, ProvideUUIDMixin):
         self.progress.append(location)
 
 
-class TrackPath(db.Model, MultiPolygonGeometryMixin):
-    """A model specifically for storing the path for a recorded track, as a MultiPolygon type geometry. Each Polygon is a single segment of the overall track.
+class TrackPath(db.Model, MultiLineStringGeometryMixin):
+    """A model specifically for storing the path for a recorded track, as a MultiLineString type geometry. Each LineString is a single segment of the overall track.
     This is associated with at most one Track instance."""
     __tablename__ = "track_path"
 
@@ -285,7 +314,7 @@ class TrackPath(db.Model, MultiPolygonGeometryMixin):
         return f"TrackPath<for={self.track.name}>"
 
 
-class Track(db.Model, ProvideUUIDMixin, PointGeometryMixin):
+class Track(db.Model, PointGeometryMixin):
     """A track created and uploaded by a User. This implements the point geometry mixin, which will refer to the start point of the track. Also, a one-to-one
     relationship with the track path represents the actual track. This model is on a dynamic load strategy for query speed reasons."""
     __tablename__ = "track"
@@ -331,6 +360,10 @@ class Track(db.Model, ProvideUUIDMixin, PointGeometryMixin):
 
     def __repr__(self):
         return f"Track<{self.name},v={self.verified}>"
+
+    @hybrid_property
+    def uid(self):
+        return self.track_hash
 
     @property
     def path(self):
@@ -493,7 +526,7 @@ class UserLocation(db.Model, PointGeometryMixin):
         return f"UserLocation<{self.user}>"
 
 
-class User(UserMixin, db.Model, ProvideUUIDMixin):
+class User(UserMixin, db.Model):
     """Represents an individual's account with HawkSpeed."""
     __tablename__ = "user_"
 
@@ -502,6 +535,7 @@ class User(UserMixin, db.Model, ProvideUUIDMixin):
 
     id                      = db.Column(db.Integer, primary_key = True)
 
+    uid                     = db.Column(db.String(65), unique = True, default = lambda: uuid.uuid4().hex.lower())
     email_address           = db.Column(db.String(128), nullable = False)
     username                = db.Column(db.String(32), nullable = True, default = None)
     bio                     = db.Column(db.Text, nullable = True, default = None)
@@ -564,6 +598,11 @@ class User(UserMixin, db.Model, ProvideUUIDMixin):
     def is_setup(cls):
         """Expression level for determining whether User is setup."""
         raise NotImplementedError()
+
+    @property
+    def player(self):
+        """Return the world Player. For now, it is just the User itself."""
+        return self
 
     @property
     def location_history(self):

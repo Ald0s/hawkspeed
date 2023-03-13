@@ -9,6 +9,7 @@ from flask import url_for
 from tests.conftest import BaseCase
 
 from app import db, config, factory, models, login_manager, world, tracks
+from app.socket import handler as sockhandler
 
 
 class TestWorld(BaseCase):
@@ -43,7 +44,7 @@ class TestWorld(BaseCase):
         oldest_location = aldos.location_history.order_by(asc(models.UserLocation.logged_at)).first()
         """Ensure that if a TrackUserRace is attached to the user location, it will not be deleted."""
         self.assertEqual(True, False)
-        
+
     def test_collect_world_objects(self):
         # Create a new User.
         aldos = factory.create_user("alden@mail.com", "password",
@@ -73,3 +74,18 @@ class TestWorld(BaseCase):
         world_view_2 = world.collect_viewed_objects(aldos, viewport_2_d)
         # Ensure there are 0 tracks in this view object.
         self.assertEqual(len(world_view_2.tracks), 0)
+
+    def test_serialise_viewport_response(self):
+        """"""
+        # Create a new User.
+        aldos = factory.create_user("alden@mail.com", "password",
+            username = "alden")
+        # Create a new track from example1.
+        example1 = tracks.create_track_from_gpx("example1.gpx")
+        db.session.flush()
+        # Create a new viewport update result, add the track in.
+        viewport_update_result = world.ViewportUpdateResult([example1])
+        # Now, instantiate a ViewportUpdateResponseSchema, and dump this result through it.
+        viewport_update_response_schema = sockhandler.ViewportUpdateResponseSchema()
+        viewport_update_d = viewport_update_response_schema.dump(viewport_update_result)
+        print(viewport_update_d)

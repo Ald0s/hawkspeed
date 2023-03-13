@@ -108,8 +108,11 @@ def create_user(email_address, password, **kwargs) -> models.User:
     new_user.set_enabled(enabled)
     new_user.set_verified(verified)
     if username:
+        LOG.debug(f"Set username for new user {email_address}! They are therefore setup.")
         new_user.set_username(username)
         new_user.set_profile_setup(True)
+    else:
+        LOG.debug(f"Did not set username for new user {email_address}, they are not setup.")
     LOG.debug(f"New account created; {new_user}")
     db.session.add(new_user)
     return new_user

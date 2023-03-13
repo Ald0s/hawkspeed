@@ -13,39 +13,8 @@ LOG.setLevel( logging.DEBUG )
 
 if config.APP_ENV == "Production" or config.APP_ENV == "LiveDevelopment":
     from sqlalchemy.dialects.postgresql import insert as insert_
-    LOG.debug(f"Engine dialect is not SQLite, assumed PostgreSQL. Using postgresql UUID.")
-    UUID = PostUUID
 elif config.APP_ENV == "Test" or config.APP_ENV == "Development":
     from sqlalchemy.dialects.sqlite import insert as insert_
-    LOG.debug(f"Engine dialect is SQLite. Using custom UUID for the UUID mixin.")
-    class UUID(TypeDecorator):
-        impl = BINARY
-        cache_ok = True
-
-        def __init__(self, *args, **kwargs):
-            kwargs.pop("as_uuid", None)
-            super().__init__(*args, **kwargs)
-
-        def load_dialect_impl(self, dialect):
-            return dialect.type_descriptor(BINARY(16))
-
-        def process_bind_param(self, value, dialect=None):
-            if value and isinstance(value, uuid.UUID):
-                return value.bytes
-            elif value and isinstance(value, str):
-                return uuid.UUID(value).bytes
-            elif value:
-                raise ValueError('value %s is not a valid uuid.UUId' % value)
-            else:
-                return None
-
-        def process_result_value(self, value, dialect):
-            if value is None:
-                return value
-            else:
-                if not isinstance(value, uuid.UUID):
-                    value = uuid.UUID(bytes = value)
-                return value
 else:
     raise Exception("unknown app env")
 insert = insert_

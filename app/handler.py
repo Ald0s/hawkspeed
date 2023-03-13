@@ -17,7 +17,7 @@ LOG.setLevel( logging.DEBUG )
 
 @login_manager.user_loader
 def load_user(id):
-    return models.User.query.get(int(id))
+    return db.session.get(models.User, int(id))
 
 
 @login_manager.unauthorized_handler

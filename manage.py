@@ -10,7 +10,7 @@ import flask_socketio
 from flask import current_app
 from sqlalchemy_utils import create_database, database_exists
 
-from app import create_app, db, config, models, error, factory
+from app import create_app, db, config, models, error, factory, tracks
 
 LOG = logging.getLogger("hawkspeed.manage")
 LOG.setLevel( logging.DEBUG )
@@ -35,6 +35,35 @@ def init_db():
         models.ServerConfiguration.new()
     db.session.flush()
     db.session.commit()
+
+
+@application.cli.command("import-gpx-routes", help = "Imports all routes stored in the GPX routes directory.")
+def import_gpx_routes():
+    # Get the absolute path to the GPX routes directory.
+    absolute_gpx_routes_dir = os.path.join(os.getcwd(), config.GPX_ROUTES_DIR)
+    # Now, list all of the files in this directory and loop them.
+    for filename in os.listdir(absolute_gpx_routes_dir):
+        # Otherwise, get the file's extension, stripped of the dot.
+        file_ext = os.path.splitext(filename)[1].strip(".").lower()
+        # If this is not a 'gpx', continue.
+        if file_ext != "gpx":
+            continue
+        try:
+            # Otherwise, attempt an import of the track via the tracks module. Shield call from track already exists.
+            tracks.create_track_from_gpx(filename)
+        except error.TrackAlreadyExists as tae:
+            continue
+    # Now that we've created tracks, commit.
+    db.session.commit()
+
+
+@application.cli.command("show-tracks", help = "")
+def show_tracks():
+    tracks = db.session.query(models.Track)\
+        .all()
+    for track in tracks:
+        print(track)
+        track.uid
 
 
 @application.cli.command("set-verified", help = "")
@@ -73,35 +102,18 @@ def set_enabled(email_address, enabled):
 
 @application.cli.command("create-user", help = "Create a new user, able to be used to use HawkSpeed fully.")
 @click.argument("email_address")
-@click.argument("username")
 @click.argument("password")
+@click.option("-u", "--username", default = None, type = str)
 @click.option("-p", "--privilege", default = models.User.PRIVILEGE_USER, is_flag = False)
 @click.option("-e", "--enabled", default = True, is_flag = True)
 @click.option("-v", "--verified", default = True)
-def create_user(email_address, username, password, privilege, enabled, verified):
+def create_user(email_address, password, username, privilege, enabled, verified):
     if models.User.search(email_address = email_address):
         raise Exception(f"Failed to create a new User ({email_address}), this user already exists.")
     LOG.debug(f"Creating a new HawkSpeed user; {email_address}")
     # Create this new user.
     new_user = factory.create_user(email_address, password,
         privilege = privilege, enabled = enabled, verified = verified, username = username)
-    LOG.debug(f"Created new user '{new_user}'!")
-    db.session.commit()
-
-
-@application.cli.command("create-user-x", help = "Create a new user, not setup.")
-@click.argument("email_address")
-@click.argument("password")
-@click.option("-p", "--privilege", default = models.User.PRIVILEGE_USER, is_flag = False)
-@click.option("-e", "--enabled", default = True, is_flag = True)
-@click.option("-v", "--verified", default = True)
-def create_user(email_address, password, privilege, enabled, verified):
-    if models.User.search(email_address = email_address):
-        raise Exception(f"Failed to create a new User ({email_address}), this user already exists.")
-    LOG.debug(f"Creating a new HawkSpeed user; {email_address}")
-    # Create this new user.
-    new_user = factory.create_user(email_address, password,
-        privilege = privilege, enabled = enabled, verified = verified)
     LOG.debug(f"Created new user '{new_user}'!")
     db.session.commit()
 

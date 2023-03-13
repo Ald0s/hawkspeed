@@ -5,9 +5,9 @@ from flask import request
 from flask_socketio import Namespace, emit, join_room, leave_room, disconnect
 from flask_login import login_required, current_user
 
-from marshmallow import Schema, fields, post_load, EXCLUDE
+from marshmallow import Schema, fields, post_load, pre_dump, EXCLUDE
 
-from .. import db, config, login_manager, socketio, models, world, races
+from .. import db, config, login_manager, socketio, models, world, races, viewmodel
 from . import authenticated_only, joined_players_only, SocketIOUserNotAuthenticated
 
 LOG = logging.getLogger("hawkspeed.socket.handler")
@@ -24,12 +24,57 @@ class ConnectAuthenticationRequestSchema(world.BasePlayerUpdateSchema, world.Bas
     pass
 
 
+class ViewportUpdateRequestSchema(world.BaseViewportUpdateSchema):
+    """A subtype of the viewport update, specifically for when the Player wishes to update their """
+    pass
+
+
 class StartRaceRequestSchema(world.BasePlayerUpdateSchema):
     """A subtype of the player update, specifically for the Player's request to begin a race. The location stored in this request should represent the point at which
     the device was when the race was started. The viewport stored should be used to ensure the Player is facing the right way."""
     track_uid               = fields.Str()
     # The player update position at the time the countdown was started.
     countdown_position      = fields.Nested(world.BasePlayerUpdateSchema, many = False)
+
+
+class ViewportUpdateResponseSchema(Schema):
+    """A response schema for the viewport update handler, or schemas that nest a viewport update. It is expected that a ViewportUpdateResult is dumped
+    through this response schema. This schema will handle the conversion of normal model instances to view models prior to being serialised."""
+    class Meta:
+        unknown = EXCLUDE
+    track_viewmodels        = fields.List(viewmodel.SerialiseViewModelField(), data_key = "tracks")
+
+    @pre_dump
+    def viewport_update_pre_dump(self, viewport_update_result, **kwargs):
+        # Raise an exception if the given object is not a ViewportUpdateResult.
+        if not isinstance(viewport_update_result, world.ViewportUpdateResult):
+            raise TypeError(f"Failed to dump a ViewportUpdateResponseSchema. This schema requires ViewportUpdateResult type. Instead, {type(viewport_update_result)} was given.")
+        # Otherwise, we'll convert this update result to a dictionary containing all view model equivalents of stored entities.
+        return dict(
+            track_viewmodels = [viewmodel.TrackViewModel(current_user, track) for track in viewport_update_result.tracks]
+        )
+
+
+class PlayerJoinResponseSchema(Schema):
+    """A response schema for a player join result."""
+    class Meta:
+        unknown = EXCLUDE
+    uid                     = fields.Str(data_key = "player_uid")
+    latitude                = fields.Decimal(as_string = True, required = True)
+    longitude               = fields.Decimal(as_string = True, required = True)
+    rotation                = fields.Decimal(as_string = True, required = True)
+    # Now, also the viewport update associated with this player update response, this can be None.
+    viewport_update         = fields.Nested(ViewportUpdateResponseSchema, many = False, allow_none = True)
+
+
+class PlayerUpdateResponseSchema(Schema):
+    """A response schema for the player update result."""
+    uid                     = fields.Str(data_key = "player_uid")
+    latitude                = fields.Decimal(as_string = True, required = True)
+    longitude               = fields.Decimal(as_string = True, required = True)
+    rotation                = fields.Decimal(as_string = True, required = True)
+    # Now, also the viewport update associated with this player update response, this can be None.
+    viewport_update         = fields.Nested(ViewportUpdateResponseSchema, many = False, allow_none = True)
 
 
 class RaceStartedResponseSchema(Schema):
@@ -65,7 +110,8 @@ class WorldNamespace(Namespace):
             player_join_result = world.parse_player_joined(current_user, connect_auth_d)
             db.session.commit()
             # Serialise the player join result.
-            player_join_d = player_join_result.serialise()
+            player_join_response_schema = PlayerJoinResponseSchema()
+            player_join_d = player_join_response_schema.dump(player_join_result)
             # Emit this to the current client.
             emit("welcome", player_join_d,
                 sid = request.sid)
@@ -108,7 +154,8 @@ class WorldNamespace(Namespace):
             # The contents of the start race result should now reflect success. We can return (in the response) a positive disposition and emit to another event handler the updated
             # status of the race as it stands, if need be.
             """TODO: emit something to some other event handler?"""
-            return start_race_result.serialise()
+            start_race_response_schema = RaceStartedResponseSchema()
+            return start_race_response_schema.dump(start_race_result)
         except error.RaceDisqualifiedError as rde:
             """TODO: the server has detected that the race either has an invalid basis for beginning, or it was a false-start. This should return a response reflecting this."""
             raise NotImplementedError("on_start_race does not yet handled RaceDisqualifiedError!")
@@ -134,7 +181,24 @@ class WorldNamespace(Namespace):
                 raise NotImplementedError("on_player_update updating race participation failed with a RaceDisqualifiedError error.")
             # Calculations are done, we can commit to database, then return the serialised response.
             db.session.commit()
-            return player_update_result.serialise()
+            player_update_response_schema = PlayerUpdateResponseSchema()
+            return player_update_response_schema.dump(player_update_result)
+        except Exception as e:
+            raise e
+
+    @joined_players_only()
+    def on_viewport_update(self, update_j, **kwargs):
+        """Called when the Player wishes to update specifically their viewport. Since the User may decide to actually scroll away from their position on the overall
+        world map, and view objects at that area."""
+        try:
+            # Instantiate a ViewportUpdateRequestSchema and load the update dictionary.
+            viewport_update_request_schema = ViewportUpdateRequestSchema()
+            viewport_update_d = viewport_update_request_schema.load(update_j)
+            # Now, call out to the world module and call the collect world objects. Expect back a ViewedObjectsResult.
+            viewport_update_result = world.collect_viewed_objects(current_user, viewport_update_d)
+            # Simply serialise and return this result.
+            viewport_update_response_schema = ViewportUpdateResponseSchema()
+            return viewport_update_response_schema.dump(viewport_update_result)
         except Exception as e:
             raise e
 

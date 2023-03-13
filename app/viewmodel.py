@@ -222,9 +222,9 @@ class BaseViewModel(SerialisableMixin):
 
 class TrackViewModel(BaseViewModel):
     """A view model that provides detail functionality specifically for Track entities."""
-    class TrackPathSchema():
+    class TrackPathSchema(Schema):
         """A response schema containing all points, each serialised through TrackPointSchema. This schema should have the Track model dumped through it."""
-        uid                     = fields.Str()
+        uid                     = fields.Str(data_key = "track_uid")
         points                  = fields.List(fields.Nested(tracks.TrackPointSchema, many = False))
 
     class TrackViewSchema(BaseViewModel.BaseViewSchema):
@@ -264,21 +264,39 @@ class TrackViewModel(BaseViewModel):
 
     @property
     def owner(self):
-        return self.patient.user
+        """Return a view model for this track's owner."""
+        try:
+            return UserViewModel(self.actor, self.patient.user)
+        except Exception as e:
+            LOG.error(e, exc_info = True)
+            raise e
+
+    @property
+    def path(self):
+        """Return the TrackPath object for this track."""
+        return self.patient.path
 
     @property
     def start_point(self):
         """Return a dictionary, containing the longitude and latitude (in 4326) of the first point."""
-        geodetic_point = self.patient.geodetic_point.coords[0]
-        return dict(track_uid = self.uid, longitude = geodetic_point[0], latitude = geodetic_point[1])
+        try:
+            geodetic_point = self.patient.geodetic_point.coords[0]
+            return dict(track_uid = self.uid, longitude = geodetic_point[0], latitude = geodetic_point[1])
+        except Exception as e:
+            LOG.error(e, exc_info = True)
+            raise e
 
     @property
     def points(self):
         """Returns a list of dictionaries, where each entry contains track uid, longitude and a latitude."""
-        # Get the multipolygon geometry from the patient entity.
-        geodetic_multi_polygon = self.patient.geodetic_multi_polygon
-        """TODO: for now, there is only a single polygon in the multi polygons, since we only support single segment tracks."""
-        return [dict(track_uid = self.uid, longitude = pt[0], latitude = pt[1]) for pt in geodetic_multi_polygon.geoms[0].exterior.coords]
+        try:
+            # Get the multilinestring geometry from the patient entity.
+            geodetic_multi_linestring = self.path.geodetic_multi_linestring
+            """TODO: for now, there is only a single linestring in the multilinestring, since we only support single segment tracks."""
+            return [dict(track_uid = self.uid, longitude = pt[0], latitude = pt[1]) for pt in geodetic_multi_linestring.geoms[0].coords]
+        except Exception as e:
+            LOG.error(e, exc_info = True)
+            raise e
 
     @property
     def verified(self):

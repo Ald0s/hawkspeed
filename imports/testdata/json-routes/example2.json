@@ -1,0 +1,82 @@
+{
+    "name": "Example2",
+    "description": "Example 2",
+    "segments": [
+        {
+            "points": [
+                {
+                    "latitude": -37.853524,
+                    "longitude": 145.006466
+                },
+                {
+                    "latitude": -37.853041,
+                    "longitude": 145.006539
+                },
+                {
+                    "latitude": -37.85246,
+                    "longitude": 145.006624
+                },
+                {
+                    "latitude": -37.852011,
+                    "longitude": 145.00669
+                },
+                {
+                    "latitude": -37.851856,
+                    "longitude": 145.006715
+                },
+                {
+                    "latitude": -37.851355,
+                    "longitude": 145.006787
+                },
+                {
+                    "latitude": -37.851283,
+                    "longitude": 145.006262
+                },
+                {
+                    "latitude": -37.850906,
+                    "longitude": 145.003473
+                },
+                {
+                    "latitude": -37.850812,
+                    "longitude": 145.002779
+                },
+                {
+                    "latitude": -37.850701,
+                    "longitude": 145.002795
+                },
+                {
+                    "latitude": -37.850563,
+                    "longitude": 145.002816
+                },
+                {
+                    "latitude": -37.850371,
+                    "longitude": 145.002844
+                },
+                {
+                    "latitude": -37.850159,
+                    "longitude": 145.002875
+                },
+                {
+                    "latitude": -37.849549,
+                    "longitude": 145.002965
+                },
+                {
+                    "latitude": -37.849438,
+                    "longitude": 145.002981
+                },
+                {
+                    "latitude": -37.84877,
+                    "longitude": 145.00308
+                },
+                {
+                    "latitude": -37.848673,
+                    "longitude": 145.003094
+                },
+                {
+                    "latitude": -37.848649,
+                    "longitude": 145.003097
+                }
+            ]
+        }
+    ]
+}
