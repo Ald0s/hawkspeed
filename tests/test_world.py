@@ -20,7 +20,7 @@ class TestWorld(BaseCase):
         def add_user_locations():
             # Add 6 user locations to the User's history.
             for x in range(6):
-                location = world._prepare_user_location(dict(latitude = -37.8490495286849, longitude = 145.00537088213827, logged_at = 1678508080+x, speed = 70.0, rotation = 180.0))
+                location = world._prepare_user_location(dict(latitude = -37.8490495286849, longitude = 145.00537088213827, logged_at = 1678508080000+x, speed = 70.0, rotation = 180.0))
                 # Add it.
                 aldos.add_location(location)
             db.session.flush()
@@ -31,9 +31,9 @@ class TestWorld(BaseCase):
         # Call the trim function.
         world._trim_player_location_history(aldos)
         db.session.flush()
-        # Ensure aldos now only has 5, and ensure the oldest logged at is ..81
+        # Ensure aldos now only has 5, and ensure the oldest logged at is ..01
         self.assertEqual(aldos.location_history.count(), 5)
-        self.assertEqual(aldos.location_history.order_by(asc(models.UserLocation.logged_at)).first().logged_at, 1678508081)
+        self.assertEqual(aldos.location_history.order_by(asc(models.UserLocation.logged_at)).first().logged_at, 1678508080001)
         # Now, delete all user locations.
         for x in aldos.location_history.all():
             db.session.delete(x)

@@ -42,11 +42,12 @@ class TrackPathIntersectsExistingTrack(Exception):
 
 
 class RaceDisqualifiedError(Exception):
+    """An exception to raise that will cause the disqualification of the given race for the given reason."""
     def __init__(self, user, track_user_race, **kwargs):
         self.user = user
         self.track_user_race = track_user_race
-        self.reason_code = kwargs.get("reason_code", "no-reason-given")
-        self.reason = kwargs.get("reason", "No reason given.")
+        self.dq_code = kwargs.get("dq_code", "no-reason-given")
+        self.dq_extra_info = kwargs.get("dq_extra_info", dict())
 
 
 class NoServerConfigurationError(Exception):

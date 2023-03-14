@@ -1,6 +1,56 @@
 import geopandas
 import geojson
 import random
+import pyproj
+import shapely
+
+from . import config
+
+
+def race_progress_to_geojson(track_user_race, buffer_progress = True):
+    # Get the track path.
+    track_path = track_user_race.track.path
+    # Get the track's multilinestring geometry.
+    geodetic_multi_linestring = track_path.geodetic_multi_linestring
+    # Now, draw the track path as a black multi line string.
+    path_multi_linestring = geojson.MultiLineString([list(line_string.coords) for line_string in geodetic_multi_linestring.geoms])
+    path_feature = geojson.Feature(
+        properties = { "stroke": "#000000" },
+        geometry = path_multi_linestring
+    )
+    if buffer_progress:
+        # Draw the progress geometry as red slightly translucent polygon buffered by configured value.
+        # But we need to buffer the transformed coordinates, then convert it back to a geodetic EPSG.
+        progress_buffered_polygon = track_user_race.linestring\
+            .buffer(config.NUM_METERS_BUFFER_PLAYER_PROGRESS, cap_style = shapely.geometry.CAP_STYLE.square)
+        # Now, transform this to a geodetic equivalent. Begin by getting a geodetic transformer for this race.
+        geodetic_transformer = track_user_race.geodetic_transformer
+        # Now, use it to transform the progress buffered polygon.
+        progress_buffered_polygon = shapely.ops.transform(geodetic_transformer.transform, progress_buffered_polygon)
+        # We can now build the GeoJSON feature.
+        progress_polygon = geojson.Polygon([list(progress_buffered_polygon.exterior.coords)])
+        progress_feature = geojson.Feature(
+            properties = {
+                "stroke": "#ff0000",
+                "stroke-width": 2,
+                "stroke-opacity": 1,
+                "fill": "#ff0000",
+                "fill-opacity": 0.5
+            },
+            geometry = progress_polygon
+        )
+    else:
+        # Get the progress' linestring.
+        geodetic_linestring = track_user_race.geodetic_linestring
+        # Draw the progress geometry as a red line string.
+        progress_linestring = geojson.LineString(list(geodetic_linestring.coords))
+        progress_feature = geojson.Feature(
+            properties = { "stroke": "#ff0000" },
+            geometry = progress_linestring
+        )
+    # Draw this feature collection, the progress feature overlay the path feature.
+    feature_collection = geojson.FeatureCollection([path_feature, progress_feature])
+    return geojson.dumps(feature_collection, indent = 4)
 
 
 def points_to_geojson(points, texts):

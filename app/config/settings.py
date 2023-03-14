@@ -1,12 +1,20 @@
 import os
 from instance import settings as private
 
+
 class SocketConfig():
     SOCKETIO_MESSAGE_QUEUE = "redis://"
     SOCKETIO_PATH = "socket.io"
     SOCKETIO_ENGINEIO_LOGGER = False
     # True if, universally, updates should be sent via the SocketIO system where applicable.
     SHOULD_SEND_SOCKETIO_UPDATES = True
+
+
+class RaceConfigurationMixin():
+    # The maximum percentage of track path not driven to disqualify the race.
+    MAX_PERCENT_PATH_MISSED_DISQUALIFY = 7
+    # The number of meters by which to buffer a Player's progress through a track, to ensure inaccuracies do not affect their ability to tag checkpoints.
+    NUM_METERS_BUFFER_PLAYER_PROGRESS = 10
 
 
 class GeospatialConfigurationMixin():
@@ -16,7 +24,7 @@ class GeospatialConfigurationMixin():
     NUM_PLAYER_UPDATES_RETAIN = 100
 
 
-class BaseConfig(private.PrivateBaseConfig, GeospatialConfigurationMixin, SocketConfig):
+class BaseConfig(private.PrivateBaseConfig, RaceConfigurationMixin, GeospatialConfigurationMixin, SocketConfig):
     TESTING = False
     DEBUG = False
     SQLALCHEMY_SESSION_OPTS = {}

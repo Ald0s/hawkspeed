@@ -62,7 +62,8 @@ class LoadPointSchema(Schema):
     latitude                = fields.Decimal(as_string = True)
     longitude               = fields.Decimal(as_string = True)
     # The following attributes are only required if we are NOT in debug mode.
-    logged_at               = fields.DateTime(required = True, allow_none = False)
+    #logged_at               = fields.DateTime(required = True, allow_none = False)
+    logged_at               = fields.Int(required = True, allow_none = False)
     speed                   = fields.Decimal(as_string = True, required = True, allow_none = False)
     rotation                = fields.Decimal(as_string = True, required = True, allow_none = False)
 

@@ -2,6 +2,7 @@ import os
 import random
 import hashlib
 import pandas
+import gpxpy
 import mimetypes
 import simplejson as json
 from datetime import datetime, date
@@ -12,7 +13,7 @@ from flask_login import FlaskLoginClient
 from flask_testing import TestCase
 from werkzeug.datastructures import FileStorage
 
-from app import create_app, db, models, config, factory, error, compat
+from app import create_app, db, models, config, factory, error, compat, world
 
 
 class BaseCase(TestCase):
@@ -260,3 +261,42 @@ class BaseBrowserCase(BaseCase):
         test_app = super().create_app()
         test_app.test_client_class = FlaskLoginClient
         return test_app
+
+
+class PlayerRaceGPXSimulator():
+    """A class that, given a User and a GPX, the programmer can step through each point in the race as if it were being driven in real time."""
+    @property
+    def user(self):
+        return self._user
+
+    def __init__(self, _user, _race_gpx_path, **kwargs):
+        self._race_gpx_path = _race_gpx_path
+        self._user = _user
+        self._race_gpx = None
+        # Now, we'll read the contents of this file. But first, ensure it exists.
+        if not os.path.isfile(self._race_gpx_path):
+            raise Exception(f"No such GPX file {self._race_gpx_path}!")
+        # Open the file and read its contents, parse as GPX.
+        with open(self._race_gpx_path, "r") as gpx_file:
+            self._race_gpx = gpxpy.parse(gpx_file)
+        # If multiple tracks, raise exception.
+        if len(self._race_gpx.tracks) > 1:
+            raise Exception("No more than ONE race is allowed in PlayerRaceGPXSimulator!")
+
+    def step(self):
+        # Step through each segment, and each point within each segment and produce a UserLocation instance.
+        # Yield that.
+        for segment in self._race_gpx.tracks[0].segments:
+            for point in segment.points:
+                yield dict(
+                    viewport_minx = 0,
+                    viewport_miny = 0,
+                    viewport_maxx = 0,
+                    viewport_maxy = 0,
+                    zoom = 0,
+                    latitude = point.latitude,
+                    longitude = point.longitude,
+                    logged_at = point.time.timestamp() * 1000,
+                    speed = 40,
+                    rotation = 180.0
+                )

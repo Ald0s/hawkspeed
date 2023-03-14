@@ -233,11 +233,13 @@ class MultiLineStringGeometryMixin(EPSGWrapperMixin):
         self.multi_linestring = multi_linestring
 
 
-class TrackUserRace(db.Model):
+class TrackUserRace(db.Model, LineStringGeometryMixin):
     """An association object between the Track model and the User model that represents a race completed by the User. This is a model that is created as soon as the User
     engages in a Race, and will enter the complete state once the server is happy the track was actually raced. Alternatively, if the race is determined to be interrupted,
     the fledgling association will be deleted. There can only be one incomplete race for one User at any time. Starting a new race will delete any currently incomplete races
-    that are not already deleted."""
+    that are not already deleted.
+
+    This model also represents a single line string, which is a geometry of the User's progress through the track."""
     __tablename__ = "track_user_race"
 
     track_id                = db.Column(db.Integer, db.ForeignKey("track.id", ondelete = "CASCADE"), primary_key = True, nullable = False)
@@ -252,11 +254,12 @@ class TrackUserRace(db.Model):
     average_speed           = db.Column(db.Integer, nullable = True, default = None)
 
     # All UserLocation instances logged by the User at the time this track was being raced. This is an eager relationship, and the referred UserLocation objects can only
-    # be deleted if the User or the TrackUserRace instances are deleted.
+    # be deleted if the User or the TrackUserRace instances are deleted. The race progress is loaded in order from start to finish (ascending.)
     progress                = db.relationship(
         "UserLocation",
         back_populates = "track_user_race",
         uselist = True,
+        order_by = "asc(UserLocation.logged_at)",
         secondary = "user_location_race")
     # The Track being raced.
     track                   = db.relationship(
@@ -282,6 +285,16 @@ class TrackUserRace(db.Model):
         """Expression level is ingoing."""
         return cls.finished == None
 
+    @property
+    def is_finished(self):
+        """Return True if the race is finished."""
+        return self.finished != None and not self.is_ongoing
+
+    @property
+    def has_progress(self):
+        """Returns True if there are at least 2 or more points attached, meaning a valid progress geometry can be set."""
+        return len(self.progress) > 1
+
     def set_track_and_user(self, track, user):
         """Setting the track and user."""
         self.track = track
@@ -294,6 +307,20 @@ class TrackUserRace(db.Model):
     def add_location(self, location):
         """Add the location as progress."""
         self.progress.append(location)
+        # Each time we add a new location, we must re-comprehend the progress geometry.
+        self._refresh_progress_geometry()
+
+    def _refresh_progress_geometry(self):
+        """Get all geometries from the list of progress locations, and set the race's progress geometry to the result."""
+        # Do not perform this refresh if the race does not yet have sufficient progress.
+        if not self.has_progress:
+            return
+        # We will comprehend a list of Shapely Points, where each represents the position from each UserLocation instance stored in progress.
+        progress_points = [ul.point.coords[0] for ul in self.progress]
+        # With this list of Point geometries, we'll instance a new LineString.
+        progress_geometry = geometry.LineString(progress_points)
+        # Set this model's geometry.
+        self.set_geometry(progress_geometry)
 
 
 class TrackPath(db.Model, MultiLineStringGeometryMixin):
@@ -312,6 +339,21 @@ class TrackPath(db.Model, MultiLineStringGeometryMixin):
 
     def __repr__(self):
         return f"TrackPath<for={self.track.name}>"
+
+    @property
+    def start_point(self):
+        """Return the Shapely Point at the very start of the track, or None if not yet set."""
+        if not self.multi_linestring:
+            return None
+        return geometry.Point(self.multi_linestring.geoms[0].coords[0])
+
+    @property
+    def finish_point(self):
+        """Return the Shapely Point at the very end of the track, or None if not yet set."""
+        if not self.multi_linestring:
+            return None
+        last_linestring = self.multi_linestring.geoms[len(self.multi_linestring.geoms)-1]
+        return geometry.Point(last_linestring.coords[len(last_linestring.coords)-1])
 
 
 class Track(db.Model, PointGeometryMixin):
@@ -415,7 +457,7 @@ class UserVerify(db.Model):
 
     @hybrid_property
     def is_expired(self):
-        """"""
+        """Returns True if this verification instance is expired."""
         if self.expires < 0:
             return False
         timestamp_now = g.get("datetime_now", datetime.now()).timestamp() \
@@ -424,7 +466,7 @@ class UserVerify(db.Model):
 
     @is_expired.expression
     def is_expired(self):
-        """"""
+        """Expression level implementation of is_expired"""
         timestamp_now = g.get("datetime_now", datetime.now()).timestamp() \
             or datetime.now().timestamp()
         return or_(self.expires < 0, timestamp_now > self.expires)
@@ -502,7 +544,7 @@ class UserLocation(db.Model, PointGeometryMixin):
     # The original latitude & longitude for the User, in an indeterminate EPSG.
     longitude               = db.Column(db.Numeric(14, 11), nullable = False)
     latitude                = db.Column(db.Numeric(13, 11), nullable = False)
-    # The time at which this location snapshot was taken. Can't be None.
+    # The time (in milliseconds) at which this location snapshot was taken. Can't be None.
     logged_at               = db.Column(db.BigInteger, nullable = False)
     # The User's rotation at this time. Can't be None.
     rotation                = db.Column(db.Numeric(8,5), nullable = False)
@@ -629,6 +671,11 @@ class User(UserMixin, db.Model):
     def requires_verification(self):
         """Returns True if this User requires a verification of any type currently."""
         return not self.is_account_verified or not self.is_password_verified
+
+    @property
+    def has_ongoing_race(self):
+        """Return True if the User currently has an ongoing race, otherwise False."""
+        return self.ongoing_race != None
 
     @property
     def ongoing_race(self):

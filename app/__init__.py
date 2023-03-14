@@ -1,4 +1,13 @@
-"""The main module for the HawkSpeed project."""
+"""The main module for the HawkSpeed project.
+
+To Do
+-----
+2. Need to migrate to SQLAlchemy 2.0
+
+Changes
+-------
+
+"""
 
 import os
 import logging

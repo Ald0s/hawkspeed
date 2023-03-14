@@ -173,13 +173,18 @@ class WorldNamespace(Namespace):
             player_update_d = player_update_request_schema.load(update_j)
             # Process the received player update.
             player_update_result = world.parse_player_update(current_user, player_update_d)
-            try:
-                # Update this Player's participation in any race.
-                races.update_race_participation_for(current_user, player_update_result)
-            except error.RaceDisqualifiedError as rde:
-                """TODO: server has detected that the race is disqualified from continuing. This should emit something to the client."""
-                raise NotImplementedError("on_player_update updating race participation failed with a RaceDisqualifiedError error.")
-            # Calculations are done, we can commit to database, then return the serialised response.
+            # Only bother executing race participation updates if the current User has an ongoing race.
+            if current_user.has_ongoing_race:
+                try:
+                    # Update this Player's participation in any race, get back a participation result.
+                    update_race_participation_result = races.update_race_participation_for(current_user, player_update_result)
+                    """TODO: this is where we check to see if the race is now complete, and if it is complete, send a notification to the client letting it know."""
+                except error.RaceDisqualifiedError as rde:
+                    # On disqualification, the race should already be disqualified & deleted. Now, we will commit these changes to database.
+                    db.session.commit()
+                    """TODO: send some indication to the client that the race is now cancelled."""
+                    raise NotImplementedError("on_player_update updating race participation failed with a RaceDisqualifiedError error.")
+            # Calculations and updates are done, we can commit to database, then return the serialised response.
             db.session.commit()
             player_update_response_schema = PlayerUpdateResponseSchema()
             return player_update_response_schema.dump(player_update_result)
