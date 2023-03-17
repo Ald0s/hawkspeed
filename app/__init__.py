@@ -6,7 +6,7 @@ To Do
 
 Changes
 -------
--> Multiple races per track supported."""
+"""
 
 import os
 import logging

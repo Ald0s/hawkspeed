@@ -2,7 +2,7 @@
 
 ## Summary
 
-A realtime, real-world mobile app that allows players to record and upload their own race tracks, then compete with other players for the best time on that track. This is of course not a marketable app, due to its dangerous nature. Currently the app is geographically locked to only work within Australia, I may change this at some stage, or you can. The primary goals for this project are:
+This project is still in a very early stage. A realtime, real-world mobile app that allows players to record and upload their own race tracks, then compete with other players for the best time on that track. This is of course not a marketable app, due to its dangerous nature. Currently the app is geographically locked to only work within Australia, I may change this at some stage, or you can. The primary goals for this project are:
 * To showcase a complex multi-platform system,
 * Consolidate a reliable workflow for employing SocketIO alongside Clean Architecture (work in progress,)
 * Rewrite an old personal project of mine with the same name.
@@ -17,7 +17,13 @@ If a Player moves within acceptable distance to a track's start point, the oppor
 
 ### Recording
 
-A race track may be recorded (right now) anywhere, as long as the Player has permission to do so by the server and the track location lands within area of use for EPSG 3112. They may select a location and start the recorder interface. At which point, the track may be driven at any pace. The points recorded are submitted to the server, which validates and normalises the track. This is then added as a verified race track to the world and is able to be raced.
+A race track may be recorded (right now) anywhere, as long as the Player has permission to do so (granted by the server) and the track location lands within area of use for EPSG 3112. They may select a location and start the recorder interface. At which point, the track may be driven at any pace. The points recorded are submitted to the server, which validates and normalises the track. This is then added as a verified race track to the world and is able to be raced.
+
+## Server
+
+This project represents the backend server portion of the system. It is built on the Flask Microframework, supported by a PostgreSQL database through the SQLAlchemy ORM. PostgreSQL is used alongside the PostGIS extension (made available via Geoalchemy.)
+
+Authentication, creation of tracks and the querying of a track's details is done via a REST API. The server also uses Flask-SocketIO to simultaneously run a stream based connection system such that the actual racing and player updates are handled in realtime.
 
 ## Disclaimer
 
@@ -25,5 +31,4 @@ Obviously don't attempt to turn this app into anything more than a cool project.
 
 ## Special Thanks
 
-1. https://gpx.studio/
-GPX Studio has been a great help in the formulation of test race tracks and player races.
+1. https://gpx.studio/ - A great help in the formulation of race tracks and player races.
