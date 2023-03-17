@@ -13,7 +13,7 @@ from flask_login import FlaskLoginClient
 from flask_testing import TestCase
 from werkzeug.datastructures import FileStorage
 
-from app import create_app, db, models, config, factory, error, compat, world
+from app import create_app, db, models, config, factory, error, compat, world, races
 
 
 class BaseCase(TestCase):
@@ -111,6 +111,20 @@ class BaseCase(TestCase):
         self.mocked_file_uploads.append(new_mocked_file)
         # And return.
         return new_mocked_file
+
+    def simulate_entire_race(self, user, track, gpx_absolute_path, **kwargs):
+        race_simulator = PlayerRaceGPXSimulator(user, gpx_absolute_path)
+        race = race_simulator.new_race(track)
+        db.session.add(race)
+        db.session.flush()
+
+        for user_location_d in race_simulator.step(**kwargs):
+            player_update_result = world.parse_player_update(user, user_location_d)
+            db.session.flush()
+            if user.has_ongoing_race:
+                update_race_participation_result = races.update_race_participation_for(user, player_update_result)
+                db.session.flush()
+        self.assertEqual(race.is_finished, True)
 
 
 class UserAppClient(FlaskLoginClient):
@@ -282,8 +296,17 @@ class PlayerRaceGPXSimulator():
         # If multiple tracks, raise exception.
         if len(self._race_gpx.tracks) > 1:
             raise Exception("No more than ONE race is allowed in PlayerRaceGPXSimulator!")
+        # Get the start time.
+        self._started = (self._race_gpx.tracks[0].segments[0].points[0].time.timestamp()) * 1000
 
-    def step(self):
+    def new_race(self, _track):
+        # Set the User, the Track and the time at which the race started; the first point in the given GPX.
+        race = models.TrackUserRace(user = self._user, track = _track, started = self._started)
+        race.set_crs(config.WORLD_CONFIGURATION_CRS)
+        return race
+
+    def step(self, **kwargs):
+        ms_adjustment = kwargs.get("ms_adjustment", 0)
         # Step through each segment, and each point within each segment and produce a UserLocation instance.
         # Yield that.
         for segment in self._race_gpx.tracks[0].segments:
@@ -296,7 +319,7 @@ class PlayerRaceGPXSimulator():
                     zoom = 0,
                     latitude = point.latitude,
                     longitude = point.longitude,
-                    logged_at = point.time.timestamp() * 1000,
+                    logged_at = (point.time.timestamp() * 1000) + ms_adjustment,
                     speed = 40,
                     rotation = 180.0
                 )

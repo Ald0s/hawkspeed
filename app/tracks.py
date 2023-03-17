@@ -11,13 +11,30 @@ import shapely
 from geoalchemy2 import shape
 
 from datetime import datetime, date
-from sqlalchemy import func
+from sqlalchemy import func, asc
 from marshmallow import fields, Schema, post_load, EXCLUDE
 
 from . import db, config, models, decorators, error
 
 LOG = logging.getLogger("hawkspeed.tracks")
 LOG.setLevel( logging.DEBUG )
+
+
+def page_leaderboard_for(track, page, **kwargs):
+    """Return a query for the desired page of the given track's leaderboard. The leaderboard is simply ordered from slowest stopwatch time to fasted stopwatch time. This function
+    will return the query object itself, which can be paginated or received in full.
+
+    Arguments
+    ---------
+    :track: An instance of Track.
+    :page: The page from which to query the leaderboard entries."""
+    try:
+        leaderboard_q = db.session.query(models.TrackUserRace)\
+            .filter(models.TrackUserRace.track_id == track.id)\
+            .order_by(asc(models.TrackUserRace.stopwatch))
+        return leaderboard_q
+    except Exception as e:
+        raise e
 
 
 class TrackPointSchema(Schema):

@@ -19,14 +19,12 @@ class TestLoginLogout(BaseAPICase):
         return f"Basic {credentials}"
 
     def test_authenticate_login_validation(self):
-        """
-        Create a user.
+        """Create a user.
         Ensure attempting to log in without email address gets a validation-error for invalid-email-address
         Ensure attempting to log in with invalid email address gets a validation-error for invalid-email-address
         Ensure attempting to log in with empty password gets validation-error for password-too-short
         Ensure attempting to log in with non-existent user gets unauthorised request fail for 'incorrect-login'
-        Ensure attempting to log into the aforementioned user with an incorrect password gets unauthorised request fail for 'incorrect-login'
-        """
+        Ensure attempting to log into the aforementioned user with an incorrect password gets unauthorised request fail for 'incorrect-login'"""
         # Create a new user.
         aldos = factory.create_user("alden@mail.com", "password",
             username = "alden")
@@ -68,16 +66,14 @@ class TestLoginLogout(BaseAPICase):
         self.ensure_unauthorised_request(login_request, "incorrect-login")
 
     def test_login_authenticate(self):
-        """
-        Create a new account, not setup, enabled or verified.
+        """Create a new account, not setup, enabled or verified.
         Ensure that when we log in, we get an account-issue failure for reason disabled.
         Enable the user.
         Ensure that when we log in, we get an account-issue failure for reason account-not-verified
         Verify the user.
         Ensure that when we log in, we get an account-issue failure for reason setup-social
         Setup the user's social.
-        Ensure that when we log in, we get an account-issue failure for reason configure-game
-        """
+        Ensure that when we log in, we get an account-issue failure for reason configure-game"""
         # Create a new account, not setup, enabled or verified.
         aldos = factory.create_user("alden@mail.com", "password",
             verified = False, enabled = False)
@@ -116,13 +112,11 @@ class TestRegistrationAndSetup(BaseAPICase):
         )
 
     def test_local_registration_validation(self):
-        """
-        Ensure all errors are raised where appropriately when invalid or insufficient data is supplied to the local registration endpoint.
+        """Ensure all errors are raised where appropriately when invalid or insufficient data is supplied to the local registration endpoint.
         Ensure we get email too short if no email provided.
         Ensure we get invalid email if invalid email provided.
         Ensure we get password not complex if the given password is not complex enough.
-        Ensure we get passwords dont match if the given password and confirm passwords dont match.
-        """
+        Ensure we get passwords dont match if the given password and confirm passwords dont match."""
         # Ensure we get email too short if we do not provide an email address.
         register_user_request = self.client.post(url_for("api.register_local_account"),
             data = json.dumps(self.get_registration_data(email_address = "")),
@@ -180,15 +174,13 @@ class TestRegistrationAndSetup(BaseAPICase):
             self.assertEqual(check_name_json["is_taken"], True)
 
     def test_local_registration(self):
-        """
-        Ensure a new user can be registered if correct data is supplied.
+        """Ensure a new user can be registered if correct data is supplied.
         Ensure the user is unverified.
         Ensure attempting to create a new user with the same email at this stage results in a ValidationError on email for reason 'email-address-registered'
         Now, when the User attempts to setup their social, this should fail with an account-issue type error, specifically because account-not-verfied
         Then, perform a request wishing to verify the account, ensure the open new-account UserVerify is set verified.
         Now, when the User wishes to setup their social, it should be allowed.
-        Ensure attempting to create a new user with the same info at this stage results in a ValidationError on email for reason 'email-address-registered-verified'
-        """
+        Ensure attempting to create a new user with the same info at this stage results in a ValidationError on email for reason 'email-address-registered-verified'"""
         valid_data = self.get_registration_data()
         # Register the account.
         register_user_request = self.client.post(url_for("api.register_local_account"),
@@ -282,3 +274,46 @@ class TestTrackAPI(BaseAPICase):
             self.assertEqual(track_path_json["track_uid"], track_from_gpx.uid)
             # Ensure there are more than 0 points in the response.
             self.assertNotEqual(len(track_path_json["points"]), 0)
+
+    def test_page_race_leaderboard(self):
+        """Import a test GPX route.
+        Create 2 Users.
+        For User1 step through an entire race for the GPX route (successful attempt.)
+        For User2 step through the same race but at 500 ms slower at each step.
+        For User1 again, step through the same race but at 1000 ms slower at each step."""
+        # Create two new Users.
+        aldos = factory.create_user("alden@mail.com", "password",
+            username = "alden")
+        emily = factory.create_user("emily@mail.com", "password",
+            username = "emily")
+        # Create a track.
+        track = tracks.create_track_from_gpx("yarra_boulevard.gpx")
+        db.session.flush()
+        # Now, for User1, step through the entire race yarra_boulevard_good_race_1.
+        self.simulate_entire_race(aldos, track, os.path.join(os.getcwd(), config.IMPORTS_PATH, "races", "yarra_boulevard_good_race_1.gpx"))
+        db.session.flush()
+        # Now for User2, step through the same race, but at 500 ms slower.
+        self.simulate_entire_race(emily, track, os.path.join(os.getcwd(), config.IMPORTS_PATH, "races", "yarra_boulevard_good_race_1.gpx"),
+            ms_adjustment = 500)
+        db.session.flush()
+        # Now for User1 again, step through the same race, but at 1000ms slower.
+        self.simulate_entire_race(aldos, track, os.path.join(os.getcwd(), config.IMPORTS_PATH, "races", "yarra_boulevard_good_race_1.gpx"),
+            ms_adjustment = 1000)
+        db.session.flush()
+        # Check there are 3 races logged in the database.
+        self.assertEqual(db.session.query(models.TrackUserRace).count(), 3)
+        # Now login as aldos, and query the leaderboard for the track above.
+        with self.app.test_client(user = aldos) as client:
+            leaderboard_response = client.get(url_for("api.page_track_leaderboard", track_uid = track.uid))
+            # Ensure the response indicates success.
+            self.assertEqual(leaderboard_response.status_code, 200)
+            # Get the JSON response.
+            leaderboard_json = leaderboard_response.json
+            # Ensure there are 3 items.
+            self.assertEqual(len(leaderboard_json["items"]), 3)
+            # Ensure the very first item's player, is aldos.
+            self.assertEqual(leaderboard_json["items"][0]["player"]["uid"], aldos.uid)
+            # The second is emily.
+            self.assertEqual(leaderboard_json["items"][1]["player"]["uid"], emily.uid)
+            # The third is aldos.
+            self.assertEqual(leaderboard_json["items"][2]["player"]["uid"], aldos.uid)

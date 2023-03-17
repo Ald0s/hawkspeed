@@ -1,3 +1,4 @@
+"""A module for drawing various geometries to their GeoJSON equivalents."""
 import geopandas
 import geojson
 import random

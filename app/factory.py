@@ -45,13 +45,11 @@ def get_random_identity():
 
 
 def get_random_user(**kwargs) -> models.User:
-    """
-    Use a random identity to create and persist a User model.
+    """Use a random identity to create and persist a User model.
     Keyword arguments
     -----------------
     :verified: Whether this User is verified or not. Default is True.
-    :setup: Whether we shoudl setup the User's profile. Default is True
-    """
+    :setup: Whether we shoudl setup the User's profile. Default is True."""
     verified = kwargs.get("verified", True)
     setup = kwargs.get("setup", True)
 
@@ -80,7 +78,7 @@ def create_user(email_address, password, **kwargs) -> models.User:
     -----------------
     :privilege: The user's privilege. Default is 0 (user.)
     :enabled: True or False whether user should be enabled. Default is True.
-    :verified: True or False whether user has verified their information/account. Default is False.
+    :verified: True or False whether user has verified their information/account. Default is True.
     :username: Provide to set the username & set profile as setup.
 
     Raises
@@ -93,7 +91,7 @@ def create_user(email_address, password, **kwargs) -> models.User:
     The new User."""
     privilege = kwargs.get("privilege", 0)
     enabled = kwargs.get("enabled", True)
-    verified = kwargs.get("verified", False)
+    verified = kwargs.get("verified", True)
     username = kwargs.get("username", None)
 
     LOG.debug(f"Adding new User: {email_address}")

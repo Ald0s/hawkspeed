@@ -156,6 +156,26 @@ def get_track(track, **kwargs):
         raise e
 
 
+@api.route("/api/v1/track/<track_uid>/leaderboard", methods = [ "GET" ])
+@decorators.account_setup_required()
+@decorators.get_track(should_belong_to_user = False)
+def page_track_leaderboard(track, **kwargs):
+    """Perform a GET request to page the leaderboard for the given track. Supply a query argument 'p' to identify the page we have requested. On success, the route will
+    return a page object containing the Track, ordered finished race outcomes, the current page number and the next page number (or None if there are no more.)"""
+    try:
+        # Get the page argument. By default, page one.
+        page = request.args.get("p", 1)
+        # With the track and the requested page, create a new track view model and get back a SerialisablePagination object from the view model.
+        track_view_model = viewmodel.TrackViewModel(current_user, track)
+        leaderboard_sp = track_view_model.page_leaderboard(page)
+        # Now, return this as a paged response, providing a base dict containing the serialised track view model, too.
+        return leaderboard_sp.as_paged_response(base_dict = dict(
+            track = track_view_model.serialise()
+        )), 200
+    except Exception as e:
+        raise e
+
+
 @api.route("/api/v1/track/<track_uid>/path", methods = [ "GET" ])
 @decorators.account_setup_required()
 @decorators.get_track(should_belong_to_user = False)
@@ -258,11 +278,3 @@ def handle_exception(e):
         LOG.error(f"Handle exception called for {e}, this type is not yet supported!")
         LOG.error(e, exc_info = True)
         return error.GlobalAPIError(error.OperationalFail("unknown-error-relog"), 400).to_response()
-
-
-@api.errorhandler(404)
-def handle_not_found(e):
-    """Handle a not found error."""
-    LOG.warning(f"Handling unhandled 404 error from {current_user} made for {request.path}")
-    # If the client is mobile, we'll serve a local ContentFail error.
-    return error.LocalAPIError(error.ContentFail("not-found"), 404).to_response()

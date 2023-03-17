@@ -79,7 +79,24 @@ class PlayerUpdateResponseSchema(Schema):
 
 class RaceStartedResponseSchema(Schema):
     """A confirmation response that the race started correctly or that the race did not start for some reason or disqualification."""
-    race_uid                = fields.Str()
+    is_started              = fields.Bool(allow_none = False)
+    race                    = fields.Nested(races.RaceSchema, many = False, allow_none = True)
+    error_code              = fields.Str(allow_none = True)
+
+
+class RaceFinishedSchema(races.RaceSchema):
+    """A one-way message from the server to the client, informing them that the current race is complete."""
+    pass
+
+
+class RaceCancelledSchema(races.RaceSchema):
+    """A one-way message from the server to the client, informing them that their current race has been cancelled."""
+    pass
+
+
+class RaceDisqualifiedSchema(races.RaceSchema):
+    """A one-way message from the server to the client, informing them that their current race has been disqualified."""
+    pass
 
 
 class WorldNamespace(Namespace):
@@ -141,9 +158,11 @@ class WorldNamespace(Namespace):
             # Before anything else, since we received intent to start a new race, cancel any ongoing race for the current User. If any, the existing race will be returned.
             old_ongoing_race = races.cancel_ongoing_race(current_user)
             if old_ongoing_race:
-                # We had an existing race, which is now deleted. Prior to committing, we need to emit an event to the client letting it know this race has been cancelled.
-                """TODO: inform the player that the race is ending."""
-                raise NotImplementedError("on_start_race letting client know about the race ending/being cancelled is not implemented.")
+                # We had an existing race, which is now cancelled. Prior to committing, we need to emit an event to the client letting it know this race has been cancelled.
+                race_cancelled_schema = RaceCancelledSchema()
+                race_cancelled_d = race_cancelled_schema.dump(old_ongoing_race)
+                emit("race-cancelled", race_cancelled_d,
+                    sid = request.sid)
             # Load the intent to start a new race.
             start_race_request_schema = StartRaceRequestSchema()
             start_race_d = start_race_request_schema.load(race_j)
@@ -151,14 +170,9 @@ class WorldNamespace(Namespace):
             player_update_result = world.parse_player_update(current_user, start_race_d)
             # Now that we have our player update result, pass it alongside the start race request to the races module, for a new race to be created. A StartRaceResult is expected.
             start_race_result = races.start_race_for(current_user, start_race_d, player_update_result)
-            # The contents of the start race result should now reflect success. We can return (in the response) a positive disposition and emit to another event handler the updated
-            # status of the race as it stands, if need be.
-            """TODO: emit something to some other event handler?"""
+            # Start race result will contain both a positive and negative result. Either way, we will return it as a serialised response.
             start_race_response_schema = RaceStartedResponseSchema()
             return start_race_response_schema.dump(start_race_result)
-        except error.RaceDisqualifiedError as rde:
-            """TODO: the server has detected that the race either has an invalid basis for beginning, or it was a false-start. This should return a response reflecting this."""
-            raise NotImplementedError("on_start_race does not yet handled RaceDisqualifiedError!")
         except Exception as e:
             raise e
 
@@ -178,12 +192,19 @@ class WorldNamespace(Namespace):
                 try:
                     # Update this Player's participation in any race, get back a participation result.
                     update_race_participation_result = races.update_race_participation_for(current_user, player_update_result)
-                    """TODO: this is where we check to see if the race is now complete, and if it is complete, send a notification to the client letting it know."""
+                    if update_race_participation_result.is_finished:
+                        # The Player has successfully finished the race. For now, a race update will simply be sent to the race-finished event.
+                        """TODO: make this reaction a bit more complicated."""
+                        race_finished_schema = RaceFinishedSchema()
+                        race_finished_d = race_finished_schema.dump(update_race_participation_result.track_user_race)
+                        emit("race-finished", race_finished_d,
+                            sid = request.sid)
                 except error.RaceDisqualifiedError as rde:
-                    # On disqualification, the race should already be disqualified & deleted. Now, we will commit these changes to database.
-                    db.session.commit()
-                    """TODO: send some indication to the client that the race is now cancelled."""
-                    raise NotImplementedError("on_player_update updating race participation failed with a RaceDisqualifiedError error.")
+                    # On disqualification, the race should already be disqualified.
+                    race_disqualified_schema = RaceDisqualifiedSchema()
+                    race_disqualified_d = race_disqualified_schema.dump(rde.track_user_race)
+                    emit("race-disqualified", race_disqualified_d,
+                        sid = request.sid)
             # Calculations and updates are done, we can commit to database, then return the serialised response.
             db.session.commit()
             player_update_response_schema = PlayerUpdateResponseSchema()

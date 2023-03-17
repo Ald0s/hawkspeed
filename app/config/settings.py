@@ -15,6 +15,8 @@ class RaceConfigurationMixin():
     MAX_PERCENT_PATH_MISSED_DISQUALIFY = 7
     # The number of meters by which to buffer a Player's progress through a track, to ensure inaccuracies do not affect their ability to tag checkpoints.
     NUM_METERS_BUFFER_PLAYER_PROGRESS = 10
+    # The maximum distance (in meters) that the Player can deviate from the track's linestring before being disqualified for leaving the track.
+    NUM_METERS_MAX_DEVIATION_DISQUALIFY = 50
 
 
 class GeospatialConfigurationMixin():
@@ -63,6 +65,8 @@ class BaseConfig(private.PrivateBaseConfig, RaceConfigurationMixin, GeospatialCo
     FORWARDED_PORT = 0
     FORWARDED_PREFIX = 0
 
+    PAGE_SIZE_LEADERBOARD = 20
+
     def __init__(self):
         self.make_dirs()
 
@@ -100,6 +104,7 @@ class TestConfig(private.PrivateTestConfig, BaseConfig):
     SQLALCHEMY_DATABASE_URI = "sqlite:///:memory:"
 
     NUM_PLAYER_UPDATES_RETAIN = 5
+    PAGE_SIZE_LEADERBOARD = 5
 
     def __init__(self):
         super().make_dirs()
@@ -122,7 +127,8 @@ class DevelopmentConfig(private.PrivateDevelopmentConfig, BaseConfig):
     GPX_ROUTES_DIR = os.path.join(IMPORTS_PATH, "gpx-routes")
 
     NUM_PLAYER_UPDATES_RETAIN = 5
-
+    PAGE_SIZE_LEADERBOARD = 5
+    
     def __init__(self):
         super().make_dirs()
 

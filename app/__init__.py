@@ -6,8 +6,7 @@ To Do
 
 Changes
 -------
-
-"""
+-> Multiple races per track supported."""
 
 import os
 import logging
@@ -59,7 +58,6 @@ def create_app():
         # If required, load the spatialite mod onto the sqlite driver.
         if db.engine.dialect.name == "sqlite":
             compat.should_load_spatialite_sync(db.engine)
-        #app.register_blueprint(frontend_blueprint)
         app.register_blueprint(api_blueprint)
         setup_socketio(socketio)
         # Import all our handlers; like unauthorised etc.

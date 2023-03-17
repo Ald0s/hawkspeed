@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta
 from flask import url_for
 from tests.conftest import BaseCase, PlayerRaceGPXSimulator
 
-from app import db, config, factory, models, login_manager, world, tracks, races, draw
+from app import db, config, factory, models, login_manager, world, tracks, races, draw, error
 
 
 class TestRaces(BaseCase):
@@ -54,8 +54,6 @@ class TestRaces(BaseCase):
         self.assertIsNotNone(race_)
 
     def test_race_track_progress(self):
-        """Create a new User, and import example1 track.
-        Verify that the """
         # Create a new User.
         aldos = factory.create_user("alden@mail.com", "password",
             username = "alden")
@@ -92,9 +90,7 @@ class TestRaces(BaseCase):
         # Now, ensure we have progress.
         self.assertEqual(race.has_progress, True)
 
-    def test_race_track_progress_x(self):
-        """Create a new User, and import yarra boulevard track.
-        Verify that the """
+    def test_race_track_bad_shortcut_1(self):
         # Create a new User.
         aldos = factory.create_user("alden@mail.com", "password",
             username = "alden")
@@ -109,10 +105,59 @@ class TestRaces(BaseCase):
         db.session.add(race)
         db.session.flush()
         loc = PlayerRaceGPXSimulator(aldos, os.path.join(os.getcwd(), config.IMPORTS_PATH, "races", "yarra_boulevard_dq_bad_shortcut.gpx"))
+        # Ensure stepping through this process results in the raising of RaceDisqualifiedError.
+        with self.assertRaises(error.RaceDisqualifiedError) as rde:
+            for user_location_d in loc.step():
+                player_update_result = world.parse_player_update(aldos, user_location_d)
+                db.session.flush()
+                if aldos.has_ongoing_race:
+                    update_race_participation_result = races.update_race_participation_for(aldos, player_update_result)
+                    db.session.flush()
+
+    def test_race_track_bad_shortcut_2(self):
+        # Create a new User.
+        aldos = factory.create_user("alden@mail.com", "password",
+            username = "alden")
+        # Create a track.
+        track = tracks.create_track_from_gpx("yarra_boulevard.gpx")
+        db.session.flush()
+        # Start a new race for this User and this track.
+        # Create a new track user race for between this user and track.
+        race = models.TrackUserRace(user = aldos, track = track)
+        # Set the CRS for this geometry.
+        race.set_crs(config.WORLD_CONFIGURATION_CRS)
+        db.session.add(race)
+        db.session.flush()
+        loc = PlayerRaceGPXSimulator(aldos, os.path.join(os.getcwd(), config.IMPORTS_PATH, "races", "yarra_boulevard_dq_bad_shortcut_2_notdone.gpx"))
+        # Ensure stepping through this process results in the raising of RaceDisqualifiedError.
+        with self.assertRaises(error.RaceDisqualifiedError) as rde:
+            for user_location_d in loc.step():
+                player_update_result = world.parse_player_update(aldos, user_location_d)
+                db.session.flush()
+                if aldos.has_ongoing_race:
+                    update_race_participation_result = races.update_race_participation_for(aldos, player_update_result)
+                    db.session.flush()
+
+    def test_race_good_race(self):
+        # Create a new User.
+        aldos = factory.create_user("alden@mail.com", "password",
+            username = "alden")
+        # Create a track.
+        track = tracks.create_track_from_gpx("yarra_boulevard.gpx")
+        db.session.flush()
+        # Start a new race for this User and this track.
+        # Create a new track user race for between this user and track.
+        race = models.TrackUserRace(user = aldos, track = track)
+        # Set the CRS for this geometry.
+        race.set_crs(config.WORLD_CONFIGURATION_CRS)
+        db.session.add(race)
+        db.session.flush()
+        loc = PlayerRaceGPXSimulator(aldos, os.path.join(os.getcwd(), config.IMPORTS_PATH, "races", "yarra_boulevard_good_race_1.gpx"))
         for user_location_d in loc.step():
             player_update_result = world.parse_player_update(aldos, user_location_d)
             db.session.flush()
-            update_race_participation_result = races.update_race_participation_for(aldos, player_update_result)
-            db.session.flush()
+            if aldos.has_ongoing_race:
+                update_race_participation_result = races.update_race_participation_for(aldos, player_update_result)
+                db.session.flush()
         # Ensure the race is now finished.
         self.assertEqual(race.is_finished, True)

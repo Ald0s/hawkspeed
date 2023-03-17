@@ -1,8 +1,8 @@
 import unittest
 
-#from tests.test_api import *
-#from tests.test_tracks import *
-#from tests.test_world import *
+from tests.test_api import *
+from tests.test_tracks import *
+from tests.test_world import *
 from tests.test_races import *
 
 

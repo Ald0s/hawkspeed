@@ -33,6 +33,10 @@ class AccountActionNeeded(Exception):
         self.action_needed_category_code = _action_needed_category_code
 
 
+class SocketIOUserNotAuthenticated(Exception):
+    pass
+
+    
 class TrackAlreadyExists(Exception):
     pass
 
@@ -48,6 +52,11 @@ class RaceDisqualifiedError(Exception):
         self.track_user_race = track_user_race
         self.dq_code = kwargs.get("dq_code", "no-reason-given")
         self.dq_extra_info = kwargs.get("dq_extra_info", dict())
+
+
+class PlayerDodgedTrackError(Exception):
+    def __init__(self, percentage_dodged, **kwargs):
+        self.percentage_dodged = percentage_dodged
 
 
 class NoServerConfigurationError(Exception):

@@ -15,7 +15,7 @@ from sqlalchemy import asc, desc
 from flask_sqlalchemy import Pagination
 from werkzeug.local import LocalProxy
 
-from . import db, config, models, error, tracks
+from . import db, config, models, error, tracks, races
 
 LOG = logging.getLogger("hawkspeed.viewmodel")
 LOG.setLevel( logging.DEBUG )
@@ -220,12 +220,62 @@ class BaseViewModel(SerialisableMixin):
         raise NotImplementedError(f"get_model_class() not implemented on {cls}")
 
 
+class LeaderboardEntryViewModel(BaseViewModel):
+    """A view model for representing a specific user's race outcome as a leaderboard entry."""
+    class LeaderboardEntryViewSchema(Schema):
+        """A schema representing a single TrackUserRace outcome for this track."""
+        uid                 = fields.Str(data_key = "race_uid")
+        started             = fields.Int()
+        finished            = fields.Int()
+        stopwatch           = fields.Int()
+        player              = SerialiseViewModelField(required = True, allow_none = False)
+        track_uid           = fields.Str()
+
+    @property
+    def uid(self):
+        """The race's UID."""
+        return self.patient.uid
+
+    @property
+    def started(self):
+        """When this race started, in milliseconds."""
+        return self.patient.started
+
+    @property
+    def finished(self):
+        """When this race finished, in milliseconds."""
+        return self.patient.finished
+
+    @property
+    def stopwatch(self):
+        """The duration of this race, in milliseconds."""
+        return self.patient.stopwatch
+
+    @property
+    def player(self):
+        """A view model for the Player who raced."""
+        return UserViewModel(self.actor, self.patient.user)
+
+    @property
+    def track_uid(self):
+        """The track's UID."""
+        return self.patient.track_uid
+
+    def serialise(self, **kwargs):
+        """Serialise and return a LeaderboardEntryViewSchema representing the view relationship between the actor entity and the patient TrackUserRace.
+
+        Returns
+        -------
+        A dumped instance of LeaderboardEntryViewSchema."""
+        return LeaderboardEntryViewModel.LeaderboardEntryViewSchema(**kwargs).dump(self)
+
+
 class TrackViewModel(BaseViewModel):
     """A view model that provides detail functionality specifically for Track entities."""
     class TrackPathSchema(Schema):
         """A response schema containing all points, each serialised through TrackPointSchema. This schema should have the Track model dumped through it."""
-        uid                     = fields.Str(data_key = "track_uid")
-        points                  = fields.List(fields.Nested(tracks.TrackPointSchema, many = False))
+        uid                 = fields.Str(data_key = "track_uid")
+        points              = fields.List(fields.Nested(tracks.TrackPointSchema, many = False))
 
     class TrackViewSchema(BaseViewModel.BaseViewSchema):
         """A schema for representing the information sent back as Track detail."""
@@ -242,7 +292,6 @@ class TrackViewModel(BaseViewModel):
         start_point         = fields.Nested(tracks.TrackPointSchema, many = False, required = True, allow_none = False)
         # Is this track verified? Can't be None.
         verified            = fields.Bool(required = True, allow_none = False)
-        """TODO: leaderboard"""
         """TODO: ratings"""
         """TODO: comments"""
 
@@ -328,6 +377,25 @@ class TrackViewModel(BaseViewModel):
     def serialise_path(self, **kwargs):
         """Serialise this track's path. This will return a dumped instance of TrackPathSchema."""
         return TrackViewModel.TrackPathSchema(**kwargs).dump(self)
+
+    def page_leaderboard(self, page = 1, **kwargs) -> ViewModelPagination:
+        """Page the leaderboard for this track. This will query a list of of TrackUserRace instances from this track, ordered to reflect fastest to slowest.
+        This function will return a ViewModelPagination instance for the requested page.
+
+        Arguments
+        ---------
+        :page: The page to get from the leaderboard.
+
+        Returns
+        -------
+        A ViewModelPagination object."""
+        try:
+            return ViewModelPagination.make(
+                tracks.page_leaderboard_for(self.patient, page).paginate(page = page, per_page = config.PAGE_SIZE_LEADERBOARD, max_per_page = config.PAGE_SIZE_LEADERBOARD, error_out = False),
+                self.actor,
+                LeaderboardEntryViewModel)
+        except Exception as e:
+            raise e
 
 
 class UserViewModel(BaseViewModel):

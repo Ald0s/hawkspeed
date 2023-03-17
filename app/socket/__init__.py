@@ -5,30 +5,27 @@ from flask import request
 from flask_login import current_user
 from flask_socketio import disconnect
 
+from .. import error
+
 LOG = logging.getLogger("hawkspeed.socket")
 LOG.setLevel( logging.DEBUG )
 
 
-"""TODO: relocate to errors."""
-class SocketIOUserNotAuthenticated(Exception):
-    pass
-
-
 def authenticated_only(**kwargs):
-    """"""
+    """A SocketIO equivalent to the login_required Flask-Login decorator."""
     def decorator(f):
         @functools.wraps(f)
         def decorated_view(self, *args, **kwargs):
             if not current_user.is_authenticated:
                 # Instead of disconnecting the User, we will raise an error instead.
-                raise SocketIOUserNotAuthenticated()
+                raise error.SocketIOUserNotAuthenticated()
             return f(self, *args, **kwargs)
         return decorated_view
     return decorator
 
 
 def joined_players_only(**kwargs):
-    """"""
+    """A decorator that will ensure the current Player is connected to the socket server, and that the SID matches between the one stored and the one in this request."""
     def decorator(f):
         @authenticated_only()
         @functools.wraps(f)
@@ -43,6 +40,7 @@ def joined_players_only(**kwargs):
             elif player.socket_id != request.sid:
                 # If the Player's socket IDs do not match at this point, raise an appropriate exception.
                 LOG.error(f"Failed for {current_user} to pass joined players only check - their Player's socket ID ({player.socket_id} does not match current session's sid ({request.sid}))")
+                """TODO: please handle this properly."""
                 raise NotImplementedError()
             # Done deal. This is a valid session, allow it.
             return f(self, *args, **kwargs)

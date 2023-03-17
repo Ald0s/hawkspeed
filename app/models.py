@@ -244,14 +244,27 @@ class TrackUserRace(db.Model, LineStringGeometryMixin):
 
     track_id                = db.Column(db.Integer, db.ForeignKey("track.id", ondelete = "CASCADE"), primary_key = True, nullable = False)
     user_id                 = db.Column(db.Integer, db.ForeignKey("user_.id", ondelete = "CASCADE"), primary_key = True, nullable = False)
+    uid                     = db.Column(db.String(65), unique = True, default = lambda: uuid.uuid4().hex.lower(), primary_key = True, nullable = False)
 
-    uid                     = db.Column(db.String(65), unique = True, default = lambda: uuid.uuid4().hex.lower())
-    # When this race was started. This is said to be when the User's client communicates their intent to begin the race. Can't be None.
-    started                 = db.Column(db.BigInteger, nullable = False, default = time.time)
-    # When this race was completed. This is said to be when the server determines the race was completed successfully.
+    # When this race was started; in milliseconds. This is said to be when the User's client communicates their intent to begin the race. Can't be None.
+    started                 = db.Column(db.BigInteger, nullable = False, default = lambda: time.time() * 1000)
+    # When this race was completed; in milliseconds. This is said to be when the server determines the race was completed successfully.
     finished                = db.Column(db.BigInteger, nullable = True, default = None)
+    # If this race was disqualified. Can't be None.
+    disqualified            = db.Column(db.Boolean, nullable = False, default = False)
+    # The reason for this race's disqualification. Can be None.
+    dq_reason               = db.Column(db.String(32), nullable = True, default = None)
+    # Extra info for the disqualification; this is JSON stored as a string. Can be None.
+    dq_extra_info_          = db.Column(db.Text, nullable = True, default = None)
+    # If this race has been cancelled. Can't be None.
+    cancelled               = db.Column(db.Boolean, nullable = False, default = False)
     # Average speed, in meters per hour.
     average_speed           = db.Column(db.Integer, nullable = True, default = None)
+    # The time taken thus far, in milliseconds.
+    stopwatch               = db.Column(db.Integer, nullable = True, default = None)
+
+    # An association proxy for the Track's UID.
+    track_uid               = association_proxy("track", "uid")
 
     # All UserLocation instances logged by the User at the time this track was being raced. This is an eager relationship, and the referred UserLocation objects can only
     # be deleted if the User or the TrackUserRace instances are deleted. The race progress is loaded in order from start to finish (ascending.)
@@ -277,23 +290,43 @@ class TrackUserRace(db.Model, LineStringGeometryMixin):
 
     @hybrid_property
     def is_ongoing(self):
-        """Returns True when finished is None."""
-        return self.finished == None
+        """Returns True when finished is None, disqualified is False and cancelled is False."""
+        return self.finished == None and self.disqualified == False and self.cancelled == False
 
     @is_ongoing.expression
     def is_ongoing(cls):
-        """Expression level is ingoing."""
-        return cls.finished == None
+        """Expression level is ongoing."""
+        return and_(cls.finished == None, and_(cls.disqualified == False, cls.cancelled == False))
 
     @property
     def is_finished(self):
-        """Return True if the race is finished."""
+        """Return True if the race is finished. That is, the finished flag is True, and the race is NOT ongoing."""
         return self.finished != None and not self.is_ongoing
+
+    @property
+    def is_disqualified(self):
+        """Returns True if the race has been disqualified."""
+        return self.disqualified
+
+    @property
+    def is_cancelled(self):
+        """Returns True if the race has been cancelled."""
+        return self.cancelled
 
     @property
     def has_progress(self):
         """Returns True if there are at least 2 or more points attached, meaning a valid progress geometry can be set."""
         return len(self.progress) > 1
+
+    @property
+    def dq_extra_info(self):
+        """TODO: If not None, parse dq_extra_info_ as JSON and return."""
+        raise NotImplementedError()
+
+    @dq_extra_info.setter
+    def dq_extra_info(self, value):
+        """TODO: If value None, set dq_extra_info_ to None. Else, dump value as JSON string and set dq_extra_info_."""
+        raise NotImplementedError()
 
     def set_track_and_user(self, track, user):
         """Setting the track and user."""
@@ -301,14 +334,45 @@ class TrackUserRace(db.Model, LineStringGeometryMixin):
         self.user = user
 
     def set_finished(self, time_finished):
-        """Set this race to finished."""
+        """Set this race to finished. This supplied timestamp must be in milliseconds."""
+        # Set the timestamp we finished at.
         self.finished = time_finished
+        # Update the stopwatch with this time.
+        self.update_stopwatch(time_finished)
+
+    def disqualify(self, dq_reason, **kwargs):
+        """A one way function. This will set the disqualified flag to True, and the accompanying arguments."""
+        dq_extra_info = kwargs.get("dq_extra_info", None)
+        self.disqualified = True
+        self.disqualification_reason = dq_reason
+        if dq_extra_info:
+            self.dq_extra_info = dq_extra_info
+
+    def cancel(self):
+        """A one way function. This will set the cancelled flag to True."""
+        self.cancelled = True
+
+    def set_average_speed(self, average_speed):
+        """Set this race's average speed."""
+        self.average_speed = average_speed
 
     def add_location(self, location):
         """Add the location as progress."""
+        # Add the new location.
         self.progress.append(location)
+        # With each new accepted location, update the stopwatch too.
+        self.update_stopwatch(location.logged_at)
         # Each time we add a new location, we must re-comprehend the progress geometry.
         self._refresh_progress_geometry()
+
+    def update_stopwatch(self, new_timestamp_ms):
+        """Update the stopwatch attribute with the latest timestamp. The given timestamp should be in milliseconds."""
+        # Stopwatch is the difference between the new timestamp and the timestamp at which we started the race.
+        new_stopwatch = new_timestamp_ms-self.started
+        if new_stopwatch < 0:
+            """TODO: remove after we are sure this is never triggered."""
+            raise NotImplementedError()
+        self.stopwatch = new_stopwatch
 
     def _refresh_progress_geometry(self):
         """Get all geometries from the list of progress locations, and set the race's progress geometry to the result."""
@@ -525,11 +589,12 @@ class UserLocationRace(db.Model):
     # Composite foreign key to TrackUserRace.
     race_track_id           = db.Column(db.Integer, nullable = False, primary_key = True)
     race_user_id            = db.Column(db.Integer, nullable = False, primary_key = True)
+    race_uid                = db.Column(db.String(65), nullable = False, primary_key = True)
 
     __table_args__ = (
         db.ForeignKeyConstraint(
-            ["race_track_id", "race_user_id"],
-            ["track_user_race.track_id", "track_user_race.user_id"]
+            ["race_track_id", "race_user_id", "race_uid"],
+            ["track_user_race.track_id", "track_user_race.user_id", "track_user_race.uid"]
         ),
     )
 
@@ -681,7 +746,7 @@ class User(UserMixin, db.Model):
     def ongoing_race(self):
         """Return the currently ongoing race instance for this User, or None."""
         return self.races_\
-            .filter(TrackUserRace.is_ongoing)\
+            .filter(TrackUserRace.is_ongoing == True)\
             .first()
 
     def add_location(self, location):

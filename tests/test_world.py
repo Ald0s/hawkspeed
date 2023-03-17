@@ -13,6 +13,54 @@ from app.socket import handler as sockhandler
 
 
 class TestWorld(BaseCase):
+    def test_dont_trim_player_location_attached_race(self):
+        # Create a new User.
+        aldos = factory.create_user("alden@mail.com", "password",
+            username = "alden")
+        # Create a track.
+        track = tracks.create_track_from_gpx("example1.gpx")
+        db.session.flush()
+        # Start a new race for this User and this track.
+        # Create a new track user race for between this user and track.
+        race = models.TrackUserRace(user = aldos, track = track, started = 1678508089000)
+        # Set the CRS for this geometry.
+        race.set_crs(config.WORLD_CONFIGURATION_CRS)
+        db.session.add(race)
+        db.session.flush()
+        # Create 10 locations, 2 will be connected to the track, 8 will not.
+        user_locations = [
+            world._prepare_user_location(dict(latitude = -37.843652, longitude = 145.03001, logged_at = 1678508081000, speed = 70.0, rotation = 180.0)),
+            world._prepare_user_location(dict(latitude = -37.84354, longitude = 145.029053, logged_at = 1678508082000, speed = 70.0, rotation = 180.0)),
+            world._prepare_user_location(dict(latitude = -37.84355, longitude = 145.029053, logged_at = 1678508083000, speed = 70.0, rotation = 180.0)),
+            world._prepare_user_location(dict(latitude = -37.84356, longitude = 145.029053, logged_at = 1678508084000, speed = 70.0, rotation = 180.0)),
+            world._prepare_user_location(dict(latitude = -37.84357, longitude = 145.029053, logged_at = 1678508085000, speed = 70.0, rotation = 180.0)),
+            world._prepare_user_location(dict(latitude = -37.84358, longitude = 145.029053, logged_at = 1678508086000, speed = 70.0, rotation = 180.0)),
+            world._prepare_user_location(dict(latitude = -37.84359, longitude = 145.029053, logged_at = 1678508087000, speed = 70.0, rotation = 180.0)),
+            world._prepare_user_location(dict(latitude = -37.84360, longitude = 145.029053, logged_at = 1678508088000, speed = 70.0, rotation = 180.0)),
+            world._prepare_user_location(dict(latitude = -37.84361, longitude = 145.029053, logged_at = 1678508089000, speed = 70.0, rotation = 180.0)),
+            world._prepare_user_location(dict(latitude = -37.84362, longitude = 145.029053, logged_at = 1678508090000, speed = 70.0, rotation = 180.0))
+        ]
+        # Associate all with the User, so they are all granted a User ID.
+        for x in user_locations:
+            aldos.add_location(x)
+        db.session.flush()
+        # Add the last 2 to the track.
+        for loc in user_locations[len(user_locations)-2:]:
+            race.add_location(loc)
+        db.session.flush()
+        # Ensure there are 10 user locations currently in the User's history.
+        self.assertEqual(aldos.location_history.count(), 10)
+        # Ensure there are 2 in the Race's progress.
+        self.assertEqual(len(race.progress), 2)
+        # Now, trim the Player's location history.
+        world._trim_player_location_history(aldos)
+        db.session.flush()
+        db.session.refresh(race)
+        # Now, ensure the Player has 7 updates in total.
+        self.assertEqual(aldos.location_history.count(), 7)
+        # Ensure there are 2 in the Race's progress.
+        self.assertEqual(len(race.progress), 2)
+
     def test_trim_player_location_history(self):
         # Create a new User.
         aldos = factory.create_user("alden@mail.com", "password",
@@ -42,8 +90,6 @@ class TestWorld(BaseCase):
         add_user_locations()
         # Get the oldest user location.
         oldest_location = aldos.location_history.order_by(asc(models.UserLocation.logged_at)).first()
-        """Ensure that if a TrackUserRace is attached to the user location, it will not be deleted."""
-        self.assertEqual(True, False)
 
     def test_collect_world_objects(self):
         # Create a new User.
@@ -88,4 +134,3 @@ class TestWorld(BaseCase):
         # Now, instantiate a ViewportUpdateResponseSchema, and dump this result through it.
         viewport_update_response_schema = sockhandler.ViewportUpdateResponseSchema()
         viewport_update_d = viewport_update_response_schema.dump(viewport_update_result)
-        print(viewport_update_d)
