@@ -225,6 +225,7 @@ class LeaderboardEntryViewModel(BaseViewModel):
     class LeaderboardEntryViewSchema(Schema):
         """A schema representing a single TrackUserRace outcome for this track."""
         uid                 = fields.Str(data_key = "race_uid")
+        finishing_place     = fields.Int()
         started             = fields.Int()
         finished            = fields.Int()
         stopwatch           = fields.Int()

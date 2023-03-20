@@ -125,6 +125,7 @@ class BaseCase(TestCase):
                 update_race_participation_result = races.update_race_participation_for(user, player_update_result)
                 db.session.flush()
         self.assertEqual(race.is_finished, True)
+        return race
 
 
 class UserAppClient(FlaskLoginClient):

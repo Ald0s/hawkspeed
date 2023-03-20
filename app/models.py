@@ -19,7 +19,7 @@ from geoalchemy2 import Geometry, shape
 from flask_login import AnonymousUserMixin, UserMixin, current_user
 from flask import request, g
 from sqlalchemy import asc, desc, or_, and_, func, select, case
-from sqlalchemy.orm import relationship, aliased, with_polymorphic, declared_attr
+from sqlalchemy.orm import relationship, aliased, with_polymorphic, declared_attr, column_property, query_expression
 from sqlalchemy.sql.expression import cast
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.hybrid import hybrid_property, hybrid_method
@@ -246,6 +246,9 @@ class TrackUserRace(db.Model, LineStringGeometryMixin):
     user_id                 = db.Column(db.Integer, db.ForeignKey("user_.id", ondelete = "CASCADE"), primary_key = True, nullable = False)
     uid                     = db.Column(db.String(65), unique = True, default = lambda: uuid.uuid4().hex.lower(), primary_key = True, nullable = False)
 
+    # A query expression which, at query time, is to be filled with a window function that queries this race's place in the leaderboard. This should only be with'd on
+    # races that are finished, that is, finished is True.
+    finishing_place         = query_expression()
     # When this race was started; in milliseconds. This is said to be when the User's client communicates their intent to begin the race. Can't be None.
     started                 = db.Column(db.BigInteger, nullable = False, default = lambda: time.time() * 1000)
     # When this race was completed; in milliseconds. This is said to be when the server determines the race was completed successfully.
@@ -298,10 +301,15 @@ class TrackUserRace(db.Model, LineStringGeometryMixin):
         """Expression level is ongoing."""
         return and_(cls.finished == None, and_(cls.disqualified == False, cls.cancelled == False))
 
-    @property
+    @hybrid_property
     def is_finished(self):
         """Return True if the race is finished. That is, the finished flag is True, and the race is NOT ongoing."""
         return self.finished != None and not self.is_ongoing
+
+    @is_finished.expression
+    def is_finished(cls):
+        """Expression level is finished."""
+        return and_(cls.finished != None, cls.is_ongoing != True)
 
     @property
     def is_disqualified(self):

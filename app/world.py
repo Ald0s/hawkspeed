@@ -57,6 +57,7 @@ class Viewport():
 
 
 class ViewportUpdateResult():
+    """A container for the Player's update for their viewport being successfully processed."""
     @property
     def tracks(self):
         return self._tracks
@@ -106,7 +107,7 @@ class BasePlayerUpdateSchema(Schema):
 
 
 class PlayerJoinResult():
-    """"""
+    """A container for the Player's join request being successfully processed."""
     @property
     def uid(self):
         return self._user.uid
@@ -123,14 +124,9 @@ class PlayerJoinResult():
     def rotation(self):
         return self._user_location.rotation
 
-    @property
-    def viewport_update(self):
-        return self._viewport_update_result
-
-    def __init__(self, user, user_location, viewport_update_result = None):
+    def __init__(self, user, user_location):
         self._user = user
         self._user_location = user_location
-        self._viewport_update_result = viewport_update_result
 
 
 def parse_player_joined(user, connect_d, **kwargs) -> PlayerJoinResult:
@@ -149,9 +145,6 @@ def parse_player_joined(user, connect_d, **kwargs) -> PlayerJoinResult:
     try:
         # Prepare a UserLocation from the given information.
         user_location = _prepare_user_location(connect_d)
-        """TODO: some extra details here."""
-        # Now, collect the objects in view for this User & their current viewport.
-        viewport_update_result = collect_viewed_objects(user, connect_d)
         # Add the user location to this User's history.
         user.add_location(user_location)
         # Flush session so user location is given an ID.
@@ -159,14 +152,14 @@ def parse_player_joined(user, connect_d, **kwargs) -> PlayerJoinResult:
         # Trim the User's location history to ensure they retain just enough.
         _trim_player_location_history(user)
         # Create and return a player join result.
-        return PlayerJoinResult(user, user_location, viewport_update_result)
+        return PlayerJoinResult(user, user_location)
     except Exception as e:
         """TODO: handle _ensure_location_supported raising exception."""
         raise e
 
 
 class PlayerUpdateResult():
-    """"""
+    """A container for the Player's update result being successfully processed."""
     @property
     def uid(self):
         return self._user.uid
@@ -213,7 +206,6 @@ def parse_player_update(user, player_update_d, **kwargs) -> PlayerUpdateResult:
     try:
         # Prepare a UserLocation from the given information.
         user_location = _prepare_user_location(player_update_d)
-        """TODO: some extra details here."""
         # Now, collect the objects in view for this User & their current viewport.
         viewport_update_result = collect_viewed_objects(user, player_update_d)
         # Add the user location to this User's history.

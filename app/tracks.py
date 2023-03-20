@@ -12,6 +12,7 @@ from geoalchemy2 import shape
 
 from datetime import datetime, date
 from sqlalchemy import func, asc
+from sqlalchemy.orm import with_expression
 from marshmallow import fields, Schema, post_load, EXCLUDE
 
 from . import db, config, models, decorators, error
@@ -29,9 +30,16 @@ def page_leaderboard_for(track, page, **kwargs):
     :track: An instance of Track.
     :page: The page from which to query the leaderboard entries."""
     try:
+        # Employ a query_expression / with_expression option on this query, to fill in the place in the leaderboard for each race outcome.
+        # We will only include races that are confirmed finished in this query.
         leaderboard_q = db.session.query(models.TrackUserRace)\
+            .filter(models.TrackUserRace.is_finished == True)\
             .filter(models.TrackUserRace.track_id == track.id)\
-            .order_by(asc(models.TrackUserRace.stopwatch))
+            .order_by(asc(models.TrackUserRace.stopwatch))\
+            .options(
+                with_expression(models.TrackUserRace.finishing_place,
+                    func.row_number()
+                        .over(order_by = asc(models.TrackUserRace.stopwatch))))
         return leaderboard_q
     except Exception as e:
         raise e
@@ -291,7 +299,7 @@ def create_track(loaded_track, server_configuration, **kwargs):
         track_path.set_geometry(track_multi_linestring)
         if intersection_check:
             # Very the track path does not intersect any existing path.
-            _ensure_track_no_intersections(track_path)
+            _ensure_track_no_interference(track_path)
         # Create a new Track instance.
         new_track = models.Track(
             track_hash = loaded_track.track_hash,
@@ -314,8 +322,8 @@ def create_track(loaded_track, server_configuration, **kwargs):
 
 
 def _validate_loaded_track(loaded_track, **kwargs):
-    """Validate the given loaded track. This function will succeed silently, or it will fail with an exception. Validating the track involves ensuring the data given by the
-    User is properly structured as a track.
+    """Validate the given loaded track; that is, one that was created by a User and therefore all recording data (speed, rotation, times) were given. This function will
+    succeed silently, or it will fail with an exception. Validating the track involves ensuring the data given by the User is properly structured as a track.
 
     Arguments
     ---------
@@ -330,31 +338,24 @@ def _validate_loaded_track(loaded_track, **kwargs):
         raise e
 
 
-def _ensure_track_no_intersections(track_path, **kwargs):
-    """Ensure the geometry represented by the (fully populated) TrackPath model does not intersect with any other existing tracks at all. That is, no
-    line from any track my cross, with a slight added buffer. On success, this function will quietly succeed, on failure, an error will be raised.
-
-    TODO: Make this function more complicated, its far more important to check against the % of the track path that are common between existing tracks, than it is to fail
-    whenever a single intersection is found. This is because multiple tracks can intersect once or twice. But, this may also be a safety aspect, since we don't really want
-    tracks to exist at all that involve give-ways, stop signs, stop lights or any other probability of collision.
+def _ensure_track_no_interference(track_path, **kwargs):
+    """Ensure the geometry represented by the (fully populated) TrackPath model does not intersect in any significant way with other existing tracks. At minimum, track start
+    points (buffered) may not intersect any other track's start point. On success, this function will quietly succeed, on failure, an error will be raised.
 
     Arguments
     ---------
     :track_path: A fully populated TrackPath model."""
     try:
-        """
-        TODO: at minimum, start points must NOT intersect each other within a buffer!
-        """
-        # Get the multilinestring geometry from the given track path.
-        new_path_geom = track_path.multi_linestring_geom
-        # Perform a query for any other track path objects that intersects this geometry.
-        intersecting_track_paths = db.session.query(models.TrackPath)\
-            .filter(func.ST_Intersects(models.TrackPath.multi_linestring_geom, new_path_geom))\
+        # Get the very first point in this track path, then buffer it by the configured value of NUM_METERS_MIN_FOR_NEW_TRACK_START.
+        start_point_buffered = track_path.start_point\
+            .buffer(config.NUM_METERS_MIN_FOR_NEW_TRACK_START, cap_style = shapely.geometry.CAP_STYLE.round)
+        # Now, perform a query for any Track whose point geometry is contained within the buffered start point.
+        intersecting_tracks = db.session.query(models.Track)\
+            .filter(func.ST_Contains(shape.from_shape(start_point_buffered, srid = config.WORLD_CONFIGURATION_CRS), models.Track.point_geom))\
             .all()
-        # If there are any more than 0 intersecting track paths, we will raise an exception.
-        if len(intersecting_track_paths) > 0:
-            LOG.warning(f"Could not parse new track, as it intersects with existing tracks.")
-            raise error.TrackPathIntersectsExistingTrack()
+        # If there are any, fail for this reason.
+        if len(intersecting_tracks) > 0:
+            raise error.TrackInspectionFailed("start-point-too-close")
         # Silently succeed.
     except Exception as e:
         raise e

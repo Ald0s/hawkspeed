@@ -36,13 +36,16 @@ class AccountActionNeeded(Exception):
 class SocketIOUserNotAuthenticated(Exception):
     pass
 
-    
+
 class TrackAlreadyExists(Exception):
     pass
 
 
-class TrackPathIntersectsExistingTrack(Exception):
-    pass
+class TrackInspectionFailed(Exception):
+    """An exception that communicates a failure in the inspection/validation portion of creating a new track."""
+    def __init__(self, error_code, **kwargs):
+        self.error_code = error_code
+        self.extra_info = kwargs.get("extra_info", None)
 
 
 class RaceDisqualifiedError(Exception):

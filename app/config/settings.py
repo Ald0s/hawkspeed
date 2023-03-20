@@ -17,6 +17,8 @@ class RaceConfigurationMixin():
     NUM_METERS_BUFFER_PLAYER_PROGRESS = 10
     # The maximum distance (in meters) that the Player can deviate from the track's linestring before being disqualified for leaving the track.
     NUM_METERS_MAX_DEVIATION_DISQUALIFY = 50
+    # The minimum distance (in meters) a new Track's start point must be away from all other Track points.
+    NUM_METERS_MIN_FOR_NEW_TRACK_START = 20
 
 
 class GeospatialConfigurationMixin():
@@ -128,7 +130,7 @@ class DevelopmentConfig(private.PrivateDevelopmentConfig, BaseConfig):
 
     NUM_PLAYER_UPDATES_RETAIN = 5
     PAGE_SIZE_LEADERBOARD = 5
-    
+
     def __init__(self):
         super().make_dirs()
 

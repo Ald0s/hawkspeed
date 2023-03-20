@@ -7,19 +7,19 @@ from flask_login import login_required, current_user
 
 from marshmallow import Schema, fields, post_load, pre_dump, EXCLUDE
 
-from .. import db, config, login_manager, socketio, models, world, races, viewmodel
-from . import authenticated_only, joined_players_only, SocketIOUserNotAuthenticated
+from .. import db, config, login_manager, socketio, models, world, races, viewmodel, error
+from . import authenticated_only, joined_players_only
 
 LOG = logging.getLogger("hawkspeed.socket.handler")
 LOG.setLevel( logging.DEBUG )
 
 
 class PlayerUpdateRequestSchema(world.BasePlayerUpdateSchema, world.BaseViewportUpdateSchema):
-    """A subtype of the player update, specifically for the Player's updating their location and viewport."""
+    """A subtype of the player update, specifically for the Player's communicating their location."""
     pass
 
 
-class ConnectAuthenticationRequestSchema(world.BasePlayerUpdateSchema, world.BaseViewportUpdateSchema):
+class ConnectAuthenticationRequestSchema(world.BasePlayerUpdateSchema):
     """A subtype of the player update, specifically for the Player's initial report upon connection."""
     pass
 
@@ -63,8 +63,6 @@ class PlayerJoinResponseSchema(Schema):
     latitude                = fields.Decimal(as_string = True, required = True)
     longitude               = fields.Decimal(as_string = True, required = True)
     rotation                = fields.Decimal(as_string = True, required = True)
-    # Now, also the viewport update associated with this player update response, this can be None.
-    viewport_update         = fields.Nested(ViewportUpdateResponseSchema, many = False, allow_none = True)
 
 
 class PlayerUpdateResponseSchema(Schema):
@@ -232,16 +230,16 @@ class WorldNamespace(Namespace):
 """
 TODO: proper management of errors here, please.
 """
-def handle_world_error(error):
+def handle_world_error(e):
     """"""
-    LOG.error(f"Unhandled error occurred in world namespace; {error}")
-    raise error
+    LOG.error(f"Unhandled error occurred in world namespace; {e}")
+    raise e
 
 
-def default_error_handler(error):
+def default_error_handler(e):
     """"""
-    if isinstance(error, SocketIOUserNotAuthenticated):
+    if isinstance(e, error.SocketIOUserNotAuthenticated):
         print("User is NOT authenticated.")
         disconnect()
-    LOG.error(f"Unhandled error occurred (global); {error}")
-    raise error
+    LOG.error(f"Unhandled error occurred (global); {e}")
+    raise e

@@ -51,7 +51,7 @@ def import_gpx_routes():
         try:
             # Otherwise, attempt an import of the track via the tracks module. Shield call from track already exists.
             tracks.create_track_from_gpx(filename)
-        except error.TrackAlreadyExists as tae:
+        except (error.TrackInspectionFailed, error.TrackAlreadyExists) as tae:
             continue
     # Now that we've created tracks, commit.
     db.session.commit()
