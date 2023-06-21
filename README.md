@@ -25,6 +25,37 @@ This project represents the backend server portion of the system. It is built on
 
 Authentication, creation of tracks and the querying of a track's details is done via a REST API. The server also uses Flask-SocketIO to simultaneously run a stream based connection system such that the actual racing and player updates are handled in realtime.
 
+## Installation
+```
+# Clone the repo and change to dir root.
+
+# Install the mod_spatialite extension.
+# This is required for running Geoalchemy with SQLite, but you may skip this and instead always use a PostgreSQL server with PostGIS.
+$ sudo apt install libsqlite3-mod-spatialite
+
+# Install packages (I use pipenv.)
+$ pipenv install
+
+# Make an instance directory in root, and within that a private settings file.
+$ mkdir instance
+$ touch settings.py
+
+# Within your private settings, create classes referred to by public app/config/settings
+
+# Run tests.
+$ ./test.sh
+
+# Run development server.
+$ ./run.sh
+
+# Production:
+# Modify Gunicorn settings found in server/gunicorn.conf.py to suit your environment, namely errorlog and accesslog. Be sure to correctly assign permissions on these files. Example;
+errorlog = "/home/USERNAME/log/hawkspeed/gunicorn-error.log"
+accesslog = "/home/USERNAME/log/hawkspeed/gunicorn-access.log"
+
+# Setup a service that will execute boot.sh.
+```
+
 ## Disclaimer
 
 Obviously don't attempt to turn this app into anything more than a cool project. Streets are designed for commuting, not for proving anything. Unless of course, the aforementioned is legal wherever you are; in which case please invite me too.

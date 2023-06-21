@@ -44,6 +44,9 @@ class BaseConfig(private.PrivateBaseConfig, RaceConfigurationMixin, GeospatialCo
     #SERVER_NAME = f"127.0.0.1:{PORT}"
     SERVER_URL = "http://192.168.0.253:5000"
 
+    SERVER_VERSION_TEXT = "0.00.02"
+    SERVER_VERSION_CODE = 2
+
     # Streaming configuration.
     MAX_CONTENT_LENGTH = 16 * 1024 * 1024 # 16 MB
     STREAM_CHUNK_SZ = 10 * 1024 * 1024 # 10 MB
@@ -55,6 +58,7 @@ class BaseConfig(private.PrivateBaseConfig, RaceConfigurationMixin, GeospatialCo
     INSTANCE_PATH = "instance"
     # Some directories.
     GPX_ROUTES_DIR = os.path.join(IMPORTS_PATH, "gpx-routes")
+    TESTDATA_GPX_ROUTES_DIR = os.path.join(IMPORTS_PATH, "gpx-routes", "test-routes")
     # What timezone should be used to report dates across the app irrespective of their relevant locations? Set to None to disable.
     GLOBAL_REPORTING_TIMEZONE = None
     # The amount of time, in seconds, until a new unverified account expires and will be deleted.

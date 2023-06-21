@@ -59,7 +59,7 @@ def get_random_user(**kwargs) -> models.User:
     LOG.debug(f"Making new random user with name {fn} {ln}...")
     new_user = models.User(
         email_address = em,
-        username = fn,
+        username = f"{fn} {ln}",
         verified = verified,
         profile_setup = setup
     )

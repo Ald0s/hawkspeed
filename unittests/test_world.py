@@ -6,7 +6,7 @@ import base64
 from sqlalchemy import func, asc
 from datetime import date, datetime, timedelta
 from flask import url_for
-from tests.conftest import BaseCase
+from unittests.conftest import BaseCase
 
 from app import db, config, factory, models, login_manager, world, tracks
 from app.socket import handler as sockhandler
@@ -22,23 +22,24 @@ class TestWorld(BaseCase):
         db.session.flush()
         # Start a new race for this User and this track.
         # Create a new track user race for between this user and track.
-        race = models.TrackUserRace(user = aldos, track = track, started = 1678508089000)
+        race = models.TrackUserRace(
+                user = aldos, track = track, started = 1678508089000)
         # Set the CRS for this geometry.
         race.set_crs(config.WORLD_CONFIGURATION_CRS)
         db.session.add(race)
         db.session.flush()
         # Create 10 locations, 2 will be connected to the track, 8 will not.
         user_locations = [
-            world._prepare_user_location(dict(latitude = -37.843652, longitude = 145.03001, logged_at = 1678508081000, speed = 70.0, rotation = 180.0)),
-            world._prepare_user_location(dict(latitude = -37.84354, longitude = 145.029053, logged_at = 1678508082000, speed = 70.0, rotation = 180.0)),
-            world._prepare_user_location(dict(latitude = -37.84355, longitude = 145.029053, logged_at = 1678508083000, speed = 70.0, rotation = 180.0)),
-            world._prepare_user_location(dict(latitude = -37.84356, longitude = 145.029053, logged_at = 1678508084000, speed = 70.0, rotation = 180.0)),
-            world._prepare_user_location(dict(latitude = -37.84357, longitude = 145.029053, logged_at = 1678508085000, speed = 70.0, rotation = 180.0)),
-            world._prepare_user_location(dict(latitude = -37.84358, longitude = 145.029053, logged_at = 1678508086000, speed = 70.0, rotation = 180.0)),
-            world._prepare_user_location(dict(latitude = -37.84359, longitude = 145.029053, logged_at = 1678508087000, speed = 70.0, rotation = 180.0)),
-            world._prepare_user_location(dict(latitude = -37.84360, longitude = 145.029053, logged_at = 1678508088000, speed = 70.0, rotation = 180.0)),
-            world._prepare_user_location(dict(latitude = -37.84361, longitude = 145.029053, logged_at = 1678508089000, speed = 70.0, rotation = 180.0)),
-            world._prepare_user_location(dict(latitude = -37.84362, longitude = 145.029053, logged_at = 1678508090000, speed = 70.0, rotation = 180.0))
+            world.prepare_user_location(dict(latitude = -37.843652, longitude = 145.03001, logged_at = 1678508081000, speed = 70.0, rotation = 180.0)),
+            world.prepare_user_location(dict(latitude = -37.84354, longitude = 145.029053, logged_at = 1678508082000, speed = 70.0, rotation = 180.0)),
+            world.prepare_user_location(dict(latitude = -37.84355, longitude = 145.029053, logged_at = 1678508083000, speed = 70.0, rotation = 180.0)),
+            world.prepare_user_location(dict(latitude = -37.84356, longitude = 145.029053, logged_at = 1678508084000, speed = 70.0, rotation = 180.0)),
+            world.prepare_user_location(dict(latitude = -37.84357, longitude = 145.029053, logged_at = 1678508085000, speed = 70.0, rotation = 180.0)),
+            world.prepare_user_location(dict(latitude = -37.84358, longitude = 145.029053, logged_at = 1678508086000, speed = 70.0, rotation = 180.0)),
+            world.prepare_user_location(dict(latitude = -37.84359, longitude = 145.029053, logged_at = 1678508087000, speed = 70.0, rotation = 180.0)),
+            world.prepare_user_location(dict(latitude = -37.84360, longitude = 145.029053, logged_at = 1678508088000, speed = 70.0, rotation = 180.0)),
+            world.prepare_user_location(dict(latitude = -37.84361, longitude = 145.029053, logged_at = 1678508089000, speed = 70.0, rotation = 180.0)),
+            world.prepare_user_location(dict(latitude = -37.84362, longitude = 145.029053, logged_at = 1678508090000, speed = 70.0, rotation = 180.0))
         ]
         # Associate all with the User, so they are all granted a User ID.
         for x in user_locations:
@@ -68,7 +69,7 @@ class TestWorld(BaseCase):
         def add_user_locations():
             # Add 6 user locations to the User's history.
             for x in range(6):
-                location = world._prepare_user_location(dict(latitude = -37.8490495286849, longitude = 145.00537088213827, logged_at = 1678508080000+x, speed = 70.0, rotation = 180.0))
+                location = world.prepare_user_location(dict(latitude = -37.8490495286849, longitude = 145.00537088213827, logged_at = 1678508080000+x, speed = 70.0, rotation = 180.0))
                 # Add it.
                 aldos.add_location(location)
             db.session.flush()

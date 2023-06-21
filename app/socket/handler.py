@@ -1,48 +1,23 @@
-import re
 import logging
 
 from flask import request
-from flask_socketio import Namespace, emit, join_room, leave_room, disconnect
-from flask_login import login_required, current_user
+from flask_socketio import Namespace, emit, disconnect, ConnectionRefusedError
+from flask_login import current_user
 
-from marshmallow import Schema, fields, post_load, pre_dump, EXCLUDE
+from marshmallow import Schema, fields, pre_dump, EXCLUDE
 
-from .. import db, config, login_manager, socketio, models, world, races, viewmodel, error
+from .. import db, error, config, models, world, races, viewmodel
 from . import authenticated_only, joined_players_only
 
 LOG = logging.getLogger("hawkspeed.socket.handler")
 LOG.setLevel( logging.DEBUG )
 
 
-class PlayerUpdateRequestSchema(world.BasePlayerUpdateSchema, world.BaseViewportUpdateSchema):
-    """A subtype of the player update, specifically for the Player's communicating their location."""
-    pass
-
-
-class ConnectAuthenticationRequestSchema(world.BasePlayerUpdateSchema):
-    """A subtype of the player update, specifically for the Player's initial report upon connection."""
-    pass
-
-
-class ViewportUpdateRequestSchema(world.BaseViewportUpdateSchema):
-    """A subtype of the viewport update, specifically for when the Player wishes to update their """
-    pass
-
-
-class StartRaceRequestSchema(world.BasePlayerUpdateSchema):
-    """A subtype of the player update, specifically for the Player's request to begin a race. The location stored in this request should represent the point at which
-    the device was when the race was started. The viewport stored should be used to ensure the Player is facing the right way."""
-    track_uid               = fields.Str()
-    # The player update position at the time the countdown was started.
-    countdown_position      = fields.Nested(world.BasePlayerUpdateSchema, many = False)
-
-
 class ViewportUpdateResponseSchema(Schema):
-    """A response schema for the viewport update handler, or schemas that nest a viewport update. It is expected that a ViewportUpdateResult is dumped
-    through this response schema. This schema will handle the conversion of normal model instances to view models prior to being serialised."""
+    """A schema for dumping a response to a viewport update. This schema requires view models returned."""
     class Meta:
         unknown = EXCLUDE
-    track_viewmodels        = fields.List(viewmodel.SerialiseViewModelField(), data_key = "tracks")
+    tracks                  = fields.List(viewmodel.SerialiseViewModelField())
 
     @pre_dump
     def viewport_update_pre_dump(self, viewport_update_result, **kwargs):
@@ -51,9 +26,26 @@ class ViewportUpdateResponseSchema(Schema):
             raise TypeError(f"Failed to dump a ViewportUpdateResponseSchema. This schema requires ViewportUpdateResult type. Instead, {type(viewport_update_result)} was given.")
         # Otherwise, we'll convert this update result to a dictionary containing all view model equivalents of stored entities.
         return dict(
-            track_viewmodels = [viewmodel.TrackViewModel(current_user, track) for track in viewport_update_result.tracks]
+            tracks = [viewmodel.TrackViewModel(current_user, track) for track in viewport_update_result.tracks]
         )
 
+
+class WorldObjectUpdateResponseSchema(Schema):
+    """A schema for dumping a general response to a world object update. This schema requires view models returned."""
+    class Meta:
+        unknown = EXCLUDE
+    tracks                  = fields.List(viewmodel.SerialiseViewModelField())
+
+    @pre_dump
+    def world_object_update_pre_dump(self, world_object_result, **kwargs):
+        # Raise an exception if the given object is not a WorldObjectUpdateResult.
+        if not isinstance(world_object_result, world.WorldObjectUpdateResult):
+            raise TypeError(f"Failed to dump a WorldObjectUpdateResponseSchema. This schema requires WorldObjectUpdateResult type. Instead, {type(world_object_result)} was given.")
+        # Otherwise, we'll convert this update result to a dictionary containing all view model equivalents of stored entities.
+        return dict(
+            tracks = [viewmodel.TrackViewModel(current_user, track) for track in world_object_result.tracks]
+        )
+    
 
 class PlayerJoinResponseSchema(Schema):
     """A response schema for a player join result."""
@@ -63,6 +55,8 @@ class PlayerJoinResponseSchema(Schema):
     latitude                = fields.Decimal(as_string = True, required = True)
     longitude               = fields.Decimal(as_string = True, required = True)
     rotation                = fields.Decimal(as_string = True, required = True)
+    # Now, also the nearby object update associated with this player join response, this can be None.
+    world_object_update     = fields.Nested(WorldObjectUpdateResponseSchema, many = False, allow_none = True)
 
 
 class PlayerUpdateResponseSchema(Schema):
@@ -71,28 +65,21 @@ class PlayerUpdateResponseSchema(Schema):
     latitude                = fields.Decimal(as_string = True, required = True)
     longitude               = fields.Decimal(as_string = True, required = True)
     rotation                = fields.Decimal(as_string = True, required = True)
-    # Now, also the viewport update associated with this player update response, this can be None.
-    viewport_update         = fields.Nested(ViewportUpdateResponseSchema, many = False, allow_none = True)
+    # Now, also the nearby object update associated with this player update response, this can be None.
+    world_object_update     = fields.Nested(WorldObjectUpdateResponseSchema, many = False, allow_none = True)
 
 
-class RaceStartedResponseSchema(Schema):
-    """A confirmation response that the race started correctly or that the race did not start for some reason or disqualification."""
-    is_started              = fields.Bool(allow_none = False)
-    race                    = fields.Nested(races.RaceSchema, many = False, allow_none = True)
-    error_code              = fields.Str(allow_none = True)
-
-
-class RaceFinishedSchema(races.RaceSchema):
+class RaceFinishedSchema(races.RaceUpdateSchema):
     """A one-way message from the server to the client, informing them that the current race is complete."""
     pass
 
 
-class RaceCancelledSchema(races.RaceSchema):
+class RaceCancelledSchema(races.RaceUpdateSchema):
     """A one-way message from the server to the client, informing them that their current race has been cancelled."""
     pass
 
 
-class RaceDisqualifiedSchema(races.RaceSchema):
+class RaceDisqualifiedSchema(races.RaceUpdateSchema):
     """A one-way message from the server to the client, informing them that their current race has been disqualified."""
     pass
 
@@ -108,12 +95,12 @@ class WorldNamespace(Namespace):
 
         Arguments
         ---------
-        :auth_d: A JSON object containing ConnectAuthenticationSchema."""
+        :auth_j: A JSON object containing RequestConnectAuthenticationSchema."""
         try:
-            LOG.debug(f"A User ({current_user}) has connected to the world.")
-            # Load the auth_d argument as a ConnectAuthenticationSchema instance.
-            connect_auth_schema = ConnectAuthenticationRequestSchema()
-            connect_auth_d = connect_auth_schema.load(auth_j)
+            LOG.debug(f"A User ({current_user}) is attempting to join the world.")
+            # Load the auth_j argument as a RequestConnectAuthentication instance.
+            request_connect_auth_schema = world.RequestConnectAuthenticationSchema()
+            request_connect_authentication = request_connect_auth_schema.load(auth_j)
             # Check the current user's socket ID. If this is not None, disconnect and set it to None.
             if current_user.socket_id:
                 # We have an existing socket ID on this User; it must go. Call disconnect on it. This will invoke the disconnection event handler, which will set this to None.
@@ -122,7 +109,11 @@ class WorldNamespace(Namespace):
             # Update current socket session and commit.
             current_user.set_socket_session(request.sid)
             # Parse the player's join request, getting back a result.
-            player_join_result = world.parse_player_joined(current_user, connect_auth_d)
+            try:
+                player_join_result = world.parse_player_joined(current_user, request_connect_authentication)
+            except world.ParsePlayerJoinedError as ppje:
+                # Raise this to be handled globally.
+                raise ppje
             db.session.commit()
             # Serialise the player join result.
             player_join_response_schema = PlayerJoinResponseSchema()
@@ -131,6 +122,7 @@ class WorldNamespace(Namespace):
             emit("welcome", player_join_d,
                 sid = request.sid)
         except Exception as e:
+            db.session.rollback()
             raise e
 
     @authenticated_only()
@@ -162,29 +154,52 @@ class WorldNamespace(Namespace):
                 emit("race-cancelled", race_cancelled_d,
                     sid = request.sid)
             # Load the intent to start a new race.
-            start_race_request_schema = StartRaceRequestSchema()
-            start_race_d = start_race_request_schema.load(race_j)
-            # Then parse the received data as a player update, to get back a player update result. This will also log the start point for the new race.
-            player_update_result = world.parse_player_update(current_user, start_race_d)
+            request_start_race_schema = races.RequestStartRaceSchema()
+            request_start_race = request_start_race_schema.load(race_j)
+            try:
+                # Then parse the received started location data as a player update, to get back a player update result. This will also log the start point for the new race.
+                player_update_result = world.parse_player_update(current_user, request_start_race.started_position)
+            except world.ParsePlayerUpdateError as ppue:
+                # The update was not able to be parsed. This is grounds for a race start error, but we must map reasons from parse player update error to relevant
+                # start race error reasons.
+                if ppue.reason_code == world.ParsePlayerUpdateError.REASON_POSITION_NOT_SUPPORTED:
+                    # Raise this to be handled locally, in the handler for on start race.
+                    raise races.RaceStartError(races.RaceStartError.REASON_POSITION_NOT_SUPPORTED)
+                else:
+                    """TODO: properly implement this."""
+                    LOG.error(f"An unsupported condition was hit in ParsePlayerUpdateError handler within on_start_race! Reason code: {ppue.reason_code}")
+                    raise NotImplementedError()
             # Now that we have our player update result, pass it alongside the start race request to the races module, for a new race to be created. A StartRaceResult is expected.
-            start_race_result = races.start_race_for(current_user, start_race_d, player_update_result)
+            # This function call may also raise a RaceStartError.
+            start_race_result = races.start_race_for(current_user, request_start_race, player_update_result)
+            # If we've made it this far, we can commit.
+            db.session.commit()
             # Start race result will contain both a positive and negative result. Either way, we will return it as a serialised response.
-            start_race_response_schema = RaceStartedResponseSchema()
-            return start_race_response_schema.dump(start_race_result)
+            return start_race_result.serialise()
+        except races.RaceStartError as rse:
+            # Race start errors will be handled here, 
+            db.session.rollback()
+            start_race_result = races.StartRaceResult(False, 
+                error_code = rse.reason_code)
+            return start_race_result.serialise()
         except Exception as e:
+            db.session.rollback()
             raise e
 
     @joined_players_only()
     def on_player_update(self, update_j, **kwargs):
-        """Called when the Player's device has received a new location update from their GPS system. This function will invoke the various Player update procedures,
-        first validating the information sent, then using it to update the Player's position, statistics, proximity entities etc. This function will reply with a
-        world update receipt, that acknowledges the update was done, and updates some crucial data for the User themselves."""
+        """Called when a player sends a message to update their location in the world. This handler will ensure the location is supported and valid, and will then commit its changes
+        to the database. The response returned will be a receipt of the newly accepted changes to location data, as well as world objects that are close to the player by proximity."""
         try:
-            # Instantiate a PlayerUpdateRequestSchema and load the update dictionary.
-            player_update_request_schema = PlayerUpdateRequestSchema()
-            player_update_d = player_update_request_schema.load(update_j)
-            # Process the received player update.
-            player_update_result = world.parse_player_update(current_user, player_update_d)
+            # Load a new request for complete player update.
+            request_player_update_schema = world.RequestPlayerUpdateSchema()
+            request_player_update = request_player_update_schema.load(update_j)
+            try:
+                # Process the received player update.
+                player_update_result = world.parse_player_update(current_user, request_player_update)
+            except world.ParsePlayerUpdateError as ppue:
+                # Raise this to handle globally.
+                raise ppue
             # Only bother executing race participation updates if the current User has an ongoing race.
             if current_user.has_ongoing_race:
                 try:
@@ -197,43 +212,79 @@ class WorldNamespace(Namespace):
                         race_finished_d = race_finished_schema.dump(update_race_participation_result.track_user_race)
                         emit("race-finished", race_finished_d,
                             sid = request.sid)
-                except error.RaceDisqualifiedError as rde:
+                except races.RaceDisqualifiedError as rde:
+                    """TODO: this should handle the raising of an error named UpdateRaceParticipationError, which in turn contains information specific to disqualification etc."""
+                    raise NotImplementedError()
                     # On disqualification, the race should already be disqualified.
-                    race_disqualified_schema = RaceDisqualifiedSchema()
-                    race_disqualified_d = race_disqualified_schema.dump(rde.track_user_race)
-                    emit("race-disqualified", race_disqualified_d,
-                        sid = request.sid)
+                    #race_disqualified_schema = RaceDisqualifiedSchema()
+                    #race_disqualified_d = race_disqualified_schema.dump(rde.track_user_race)
+                    #emit("race-disqualified", race_disqualified_d,
+                    #    sid = request.sid)
             # Calculations and updates are done, we can commit to database, then return the serialised response.
             db.session.commit()
             player_update_response_schema = PlayerUpdateResponseSchema()
             return player_update_response_schema.dump(player_update_result)
         except Exception as e:
+            db.session.rollback()
             raise e
-
+        
     @joined_players_only()
     def on_viewport_update(self, update_j, **kwargs):
-        """Called when the Player wishes to update specifically their viewport. Since the User may decide to actually scroll away from their position on the overall
+        """Called when the user wishes to update specifically their viewport. Since the User may decide to actually scroll away from their position on the overall
         world map, and view objects at that area."""
         try:
-            # Instantiate a ViewportUpdateRequestSchema and load the update dictionary.
-            viewport_update_request_schema = ViewportUpdateRequestSchema()
-            viewport_update_d = viewport_update_request_schema.load(update_j)
-            # Now, call out to the world module and call the collect world objects. Expect back a ViewedObjectsResult.
-            viewport_update_result = world.collect_viewed_objects(current_user, viewport_update_d)
+            # Load update json object as a request for a viewport update.
+            request_viewport_update_schema = world.RequestViewportUpdateSchema()
+            request_viewport_update = request_viewport_update_schema.load(update_j)
+            try:
+                # Now, call out to the world module and call the collect world objects. Expect back a ViewedObjectsResult.
+                viewport_update_result = world.collect_viewed_objects(current_user, request_viewport_update.viewport)
+            except world.CollectViewedObjectsError as cvoe:
+                # Raise this to handle locally.
+                raise cvoe
             # Simply serialise and return this result.
             viewport_update_response_schema = ViewportUpdateResponseSchema()
             return viewport_update_response_schema.dump(viewport_update_result)
+        except world.CollectViewedObjectsError as cvoe:
+            """TODO: failed to collect viewed objects. Determine why and re-raise if necessary. But for errors like viewport not supported, we can simply return
+            a failure-type object that informs client of the issue."""
         except Exception as e:
             raise e
 
 
-"""
-TODO: proper management of errors here, please.
-"""
 def handle_world_error(e):
-    """"""
-    LOG.error(f"Unhandled error occurred in world namespace; {e}")
-    raise e
+    """Where we handle general world errors. If required, this is where we actually map server-only errors that relate to the world module, to response compatible errors that can be
+    sent to the client."""
+    if isinstance(e, world.ParsePlayerJoinedError):
+        """This error being raised constitutes a failure to parse a request by a player to join the world. This may be for many reasons, that we will log here."""
+        """
+        TODO: log data about the failure; was it a position not supported error?
+
+        Main responsibilities:
+        1. Log this position that's not supported, along with the reason code for specifics.
+        2. Send the user an error event describing this issue.
+        3. Disconnect the user from the socket server."""
+        # Finally, raise a connection refused error with the content being a local socket error of a join world refused error.
+        raise ConnectionRefusedError(error.LocalSocketError(error.JoinWorldRefusedError(e.reason_code)).to_dict())
+    elif isinstance(e, world.ParsePlayerUpdateError):
+        """This error being raised constitutes a failure to parse a request by a player to update their position in the world. This may be for many reasons, that we will log here.
+        The resolution for this error always involves disconnecting the user from the world."""
+        """
+        TODO: log data about the failure; was it a position not supported error?
+
+        Main responsibilities:
+        1. Log this position that's not supported, along with the reason code for specifics.
+        2. Send the user an error event describing this issue.
+        3. Disconnect the user from the socket server."""
+        # Finally, emit a kick notification for the client, prior to disconnecting them.
+        emit("kicked", error.LocalSocketError(error.KickedFromWorldError(e.reason_code)).to_dict(),
+            sid = request.sid)
+    else:
+        # Otherwise, re-raise this error after printing it.
+        LOG.error(f"Unhandled error occurred in world namespace; {e}")
+        raise e
+    # Dropped out of error handling without raising. This means a message has been sent. We will now close the connection.
+    disconnect()
 
 
 def default_error_handler(e):

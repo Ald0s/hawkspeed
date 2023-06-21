@@ -62,7 +62,7 @@ def setup_socketio(socketio):
     # Register all socket namespaces.
     socketio.on_namespace(handler.WorldNamespace("/"))
 
-    @socketio.on_error("/world")
+    @socketio.on_error("/")
     def error_handler_world(e):
         # Setup error handler for the '/world' namespace.
         handler.handle_world_error(e)

@@ -1,5 +1,5 @@
 [[source]]
-url = "https://pypi.python.org/simple"
+url = "https://pypi.org/simple"
 verify_ssl = true
 name = "pypi"
 
@@ -28,8 +28,10 @@ python-dotenv = "*"
 eventlet = "==0.30.2"
 gpxpy = "*"
 emoji = "*"
+pyproj = "*"
+gunicorn = "==20.1.0"
 
 [dev-packages]
 
 [requires]
-python_version = "3.8"
+python_version = "3.9"

@@ -20,8 +20,60 @@ LOG = logging.getLogger("hawkspeed.races")
 LOG.setLevel( logging.DEBUG )
 
 
-class RaceSchema(Schema):
-    """A Schema that outlines the structure of a report on a TrackUserRace, for the Player currently performing that race."""
+class RaceStartError(Exception):
+    """An exception that will communicate the reason for a failed race start."""
+    REASON_POSITION_NOT_SUPPORTED = "position-not-supported"
+    REASON_NO_COUNTDOWN_POSITION = "no-countdown-position"
+    REASON_NO_STARTED_POSITION = "no-started-position"
+    
+    def __init__(self, reason_code):
+        self.reason_code = reason_code
+
+
+class RaceDisqualifiedError(Exception):
+    """An exception to raise that will cause the disqualification of the given race for the given reason."""
+    def __init__(self, user, track_user_race, **kwargs):
+        self.user = user
+        self.track_user_race = track_user_race
+        self.dq_code = kwargs.get("dq_code", "no-reason-given")
+        self.dq_extra_info = kwargs.get("dq_extra_info", dict())
+
+
+class PlayerDodgedTrackError(Exception):
+    def __init__(self, percentage_dodged, **kwargs):
+        self.percentage_dodged = percentage_dodged
+
+
+class RequestStartRace():
+    """A container for a loaded request to start a new race."""
+    def __init__(self, **kwargs):
+        self.track_uid = kwargs.get("track_uid")
+        self.started_position = kwargs.get("started_position")
+        self.countdown_position = kwargs.get("countdown_position")
+
+
+class RequestStartRaceSchema(Schema):
+    """A subtype of the player update, specifically for the Player's request to begin a race. The location stored in this request should represent the point at which
+    the device was when the race was started. The viewport stored should be used to ensure the Player is facing the right way."""
+    class Meta:
+        unknown = EXCLUDE
+    # The track's UID.
+    track_uid               = fields.Str()
+    # The player update position at the time the countdown finished and the race began.
+    started_position        = fields.Nested(world.RequestPlayerViewportUpdateSchema, many = False)
+    # The player update position at the time the countdown was started.
+    countdown_position      = fields.Nested(world.RequestPlayerUpdateSchema, many = False)
+
+    @post_load
+    def request_start_race_post_load(self, data, **kwargs) -> RequestStartRace:
+        return RequestStartRace(**data)
+    
+
+class RaceUpdateSchema(Schema):
+    """A Schema that outlines the structure of a report on a TrackUserRace, for the Player currently performing that race. So this is not a view model compatible
+    object, and does not contain any data points that considers any perspective."""
+    class Meta:
+        unknown = EXCLUDE
     uid                     = fields.Str()
     track_uid               = fields.Str()
     started                 = fields.Int()
@@ -34,6 +86,12 @@ class RaceSchema(Schema):
 
 class StartRaceResult():
     """A container for storing the result of starting a new race."""
+    class StartRaceResponseSchema(Schema):
+        """A confirmation response that the race started correctly or that the race did not start for some reason or disqualification."""
+        is_started              = fields.Bool(allow_none = False)
+        race                    = fields.Nested(RaceUpdateSchema, many = False, allow_none = True)
+        error_code              = fields.Str(allow_none = True)
+
     @property
     def is_started(self):
         return self._started
@@ -52,9 +110,13 @@ class StartRaceResult():
         self._started = _started
         self._track_user_race = kwargs.get("track_user_race", None)
         self._error_code = kwargs.get("error_code", None)
+    
+    def serialise(self, **kwargs):
+        schema = self.StartRaceResponseSchema(**kwargs)
+        return schema.dump(self)
 
 
-def start_race_for(user, start_race_d, player_update_result, **kwargs) -> StartRaceResult:
+def start_race_for(user, request_start_race, player_update_result, **kwargs) -> StartRaceResult:
     """Upon request, start a race between the given User and the track specified in the start race request. When we create the race, the given user location in the update
     result should be added to the new track user race as the first position. The track will be read from the start race request by its UID. It will be checked that the Player
     is facing in the correct direction.
@@ -62,17 +124,16 @@ def start_race_for(user, start_race_d, player_update_result, **kwargs) -> StartR
     Arguments
     ---------
     :user: The User who wishes to race.
-    :start_race_d: A loaded StartRaceRequestSchema.
+    :request_start_race: An instance of RequestStartRace.
     :player_update_result: The result of passing the request through the player update process, and the very first position in the race.
 
     Returns
     -------
     Returns an instance of StartRaceResult."""
     try:
-        track_uid = start_race_d.get("track_uid", None)
         # Locate the desired track, only verified tracks can be used.
         track = db.session.query(models.Track)\
-            .filter(models.Track.uid == track_uid)\
+            .filter(models.Track.uid == request_start_race.track_uid)\
             .filter(models.Track.verified == True)\
             .first()
         # If no track, raise an exception.
@@ -80,7 +141,7 @@ def start_race_for(user, start_race_d, player_update_result, **kwargs) -> StartR
             """TODO: handle this correctly."""
             raise NotImplementedError("start_race_for failed because no track could be found, and this case is NOT yet handled.")
         # Now, validate the User's position & countdown measurements to search for disqualification cases. This will either silently succeed, or will raise an error.
-        _validate_new_race_intent(user, start_race_d, player_update_result)
+        _validate_new_race_intent(user, request_start_race, player_update_result)
         # Get the user location for the point logged at race start.
         user_location = player_update_result.user_location
         # Valid pre-race conditions. We can now build a track user race instance from the different components. Set the time started to the user location's logged at.
@@ -96,7 +157,7 @@ def start_race_for(user, start_race_d, player_update_result, **kwargs) -> StartR
         # The result declares we have succesfully started the race.
         return StartRaceResult(True,
             track_user_race = track_user_race)
-    except error.RaceDisqualifiedError as rde:
+    except RaceDisqualifiedError as rde:
         """TODO: handle any failure to start the race. Return a False result, with appropriate error messaging."""
         raise NotImplementedError()
     except Exception as e:
@@ -154,7 +215,7 @@ def update_race_participation_for(user, player_update_result, **kwargs) -> Updat
             return UpdateRaceParticipationResult(True, ongoing_race)
         # Otherwise, race is not finished just yet, return a negative result.
         return UpdateRaceParticipationResult(False, ongoing_race)
-    except error.RaceDisqualifiedError as rde:
+    except RaceDisqualifiedError as rde:
         # The race must be disqualified. Call the disqualification procedure.
         disqualify_ongoing_race(rde.user, rde.dq_code,
             dq_extra_info = rde.dq_extra_info)
@@ -205,23 +266,22 @@ def cancel_ongoing_race(user, **kwargs) -> models.TrackUserRace:
         raise e
 
 
-def _validate_new_race_intent(user, start_race_d, player_update_result, **kwargs):
+def _validate_new_race_intent(user, request_start_race, player_update_result, **kwargs):
     """Validate a User's intent for a new race along with their position and countdown movement changes relative to the track they intend on racing. The goal of this function
     is to detect cheating through creeping or other false starts. That said, GPS is a real hit and miss, so some inaccuracies are expected and accepted; nothing we can do really.
 
     Arguments
     ---------
     :user: The User pushing the intent.
-    :start_race_d: A loaded instance of StartRaceRequestSchema.
+    :request_start_race: An instance of RequestStartRace.
     :player_update_result: The result of passing the request through the player update process, and the very first position in the race."""
     try:
         # Get the countdown location, which is the very first point, logged as soon as the countdown had begun. This will be a base player update as a schema. We will first build
         # a UserLocation instance out of the countdown position.
-        countdown_position_d = start_race_d.get("countdown_position", None)
-        if not countdown_position_d:
+        if not request_start_race.countdown_position:
             """Countdown position can't be None. Please handle this correctly."""
             raise NotImplementedError("_validate_new_race_intent failed because no countdown position was given. And this case is unhandled.")
-        countdown_user_location = world.prepare_user_location(countdown_position_d)
+        countdown_user_location = world.prepare_user_location(request_start_race.countdown_position)
         # Get the race started User location, which is the very first point, logged as soon as the race state changed from countdown to GO!
         first_user_location = player_update_result.user_location
         """
@@ -281,9 +341,9 @@ def _verify_race_progress(user, track_user_race, player_update_result, **kwargs)
             # Return a race progress result where we declare the race is finished.
             return VerifyRaceProgressResult(True, time_finished = user_location.logged_at)
         return VerifyRaceProgressResult(False)
-    except error.PlayerDodgedTrackError as pdte:
+    except PlayerDodgedTrackError as pdte:
         LOG.warning(f"Disqualifying race {track_user_race}, the Player has dodged too much of the track. ({pdte.percentage_dodged}%)")
-        raise error.RaceDisqualifiedError(user, track_user_race,
+        raise RaceDisqualifiedError(user, track_user_race,
             dq_code = "missed-track")
     except Exception as e:
         raise e
@@ -302,7 +362,8 @@ def _update_race_averages(user, track_user_race, player_update_result, **kwargs)
         # Begin by comprehending a list of all speeds in the race progress.
         race_speeds = [x.speed for x in track_user_race.progress if x.speed is not None]
         # Calculate and set the average speed.
-        track_user_race.set_average_speed(sum(race_speeds) / len(race_speeds))
+        average_speed = int(sum(race_speeds) / len(race_speeds))
+        track_user_race.set_average_speed(average_speed)
     except Exception as e:
         raise e
 
@@ -381,6 +442,6 @@ def _ensure_player_hasnt_dodged_track(track_path_linestring, progress_polygon, h
         # Check if the Player has missed too much, raise a disqualification error if they have.
         percentage_track_missed = (missed_track_lengths_sum/track_path_linestring.length) * 100
         if percentage_track_missed > config.MAX_PERCENT_PATH_MISSED_DISQUALIFY:
-            raise error.PlayerDodgedTrackError(int(percentage_track_missed))
+            raise PlayerDodgedTrackError(int(percentage_track_missed))
     except Exception as e:
         raise e

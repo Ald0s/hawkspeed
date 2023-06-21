@@ -5,7 +5,7 @@ import base64
 
 from datetime import date, datetime, timedelta
 from flask import url_for
-from tests.conftest import BaseAPICase
+from unittests.conftest import BaseAPICase
 
 from app import db, config, factory, models, login_manager, tracks
 

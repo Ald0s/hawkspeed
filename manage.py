@@ -10,7 +10,7 @@ import flask_socketio
 from flask import current_app
 from sqlalchemy_utils import create_database, database_exists
 
-from app import create_app, db, config, models, error, factory, tracks
+from app import create_app, db, config, models, decorators, error, factory, tracks
 
 LOG = logging.getLogger("hawkspeed.manage")
 LOG.setLevel( logging.DEBUG )
@@ -38,7 +38,8 @@ def init_db():
 
 
 @application.cli.command("import-gpx-routes", help = "Imports all routes stored in the GPX routes directory.")
-def import_gpx_routes():
+@decorators.get_server_configuration()
+def import_gpx_routes(server_configuration, **kwargs):
     # Get the absolute path to the GPX routes directory.
     absolute_gpx_routes_dir = os.path.join(os.getcwd(), config.GPX_ROUTES_DIR)
     # Now, list all of the files in this directory and loop them.
@@ -50,8 +51,11 @@ def import_gpx_routes():
             continue
         try:
             # Otherwise, attempt an import of the track via the tracks module. Shield call from track already exists.
-            tracks.create_track_from_gpx(filename)
-        except (error.TrackInspectionFailed, error.TrackAlreadyExists) as tae:
+            # We'll get back a created track object, which contains the new track. We'll then set the owner of this track to the hawkspeed User.
+            created_track = tracks.create_track_from_gpx(filename)
+            created_track.track.set_owner(server_configuration.user)
+            db.session.flush()
+        except (tracks.TrackInspectionFailed, tracks.TrackAlreadyExists) as tae:
             continue
     # Now that we've created tracks, commit.
     db.session.commit()

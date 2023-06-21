@@ -24,20 +24,12 @@ account_password_policy = PasswordPolicy.from_names(
 )
 
 
-class AccountResponseSchema(Schema):
-    """Defines a schema for returning a successful authentication for a user.
-    This is to be serialised with the User model."""
-    uid                     = fields.Str()
-    email_address           = fields.Str()
-    username                = fields.Str(nullable = True)
-
-    is_account_verified     = fields.Bool(data_key = "account_verified")
-    is_password_verified    = fields.Bool(data_key = "password_verified")
-    is_profile_setup        = fields.Bool(data_key = "profile_setup")
-    #is_setup                = fields.Bool()
-    #enabled                 = fields.Bool()
-    #verified                = fields.Bool()
-    #privilege               = fields.Int()
+class RequestLoginLocal():
+    """A container for a request for a login local."""
+    def __init__(self, **kwargs):
+        self.email_address = kwargs.get("email_address")
+        self.password = kwargs.get("password")
+        self.remember_me = kwargs.get("remember_me")
 
 
 class RequestLoginLocalSchema(Schema):
@@ -77,6 +69,10 @@ class RequestLoginLocalSchema(Schema):
         if not value:
             LOG.error(f"Failed to parse login local account - password is too short")
             raise ValidationError("password-too-short")
+
+    @post_load
+    def request_login_local_post_load(self, data, **kwargs) -> RequestLoginLocal:
+        return RequestLoginLocal(**data)
 
 
 class RegistrationResponseSchema(Schema):
@@ -125,6 +121,14 @@ class RequestNewAccountBaseSchema(Schema):
                 raise ValidationError("email-address-registered-verified")
 
 
+class RequestNewLocalAccount():
+    """A container for a loaded request for a new local account."""
+    def __init__(self, **kwargs):
+        self.email_address = kwargs.get("email_address")
+        self.password = kwargs.get("password")
+        self.confirm_password = kwargs.get("confirm_password")
+
+
 class RequestNewLocalAccountSchema(RequestNewAccountBaseSchema):
     """Defines the data for setting up an account via HawkSpeed- this involves a password provided by the User and
     will result in the requirement for the User to verify the supplied information."""
@@ -162,11 +166,10 @@ class RequestNewLocalAccountSchema(RequestNewAccountBaseSchema):
         if self.password != value:
             LOG.error(f"Failed to create a new account - passwords don't match.")
             raise ValidationError("passwords-dont-match")
-
-
-class CheckNameRequestSchema(Schema):
-    """Defines a schema for allowing a User to check whether a given username has been taken or not."""
-    username                = fields.Str()
+    
+    @post_load
+    def request_new_local_account_post_load(self, data, **kwargs) -> RequestNewLocalAccount:
+        return RequestNewLocalAccount(**data)
 
 
 class CheckNameResponseSchema(Schema):
@@ -175,14 +178,24 @@ class CheckNameResponseSchema(Schema):
     is_taken                = fields.Bool()
 
 
+class RequestSetupProfile():
+    """A container for a loaded request to setup a profile."""
+    def __init__(self, **kwargs):
+        #profile_image
+        self.username = kwargs.get("username")
+        self.bio = kwargs.get("bio")
+        self.vehicle_information = kwargs.get("vehicle_information")
+
+
 class RequestSetupProfileSchema(Schema):
     """Defines the data required for completing the profile setup step when creating a new account. This is done after
     verification, and allows the User the chance to setup their username, bio and profile image."""
     class Meta:
         unknown = EXCLUDE
-    username                = fields.Str()
-    bio                     = fields.Str(load_default = "", allow_none = True)
     #profile_image           = media.MediaField(allow_none = True)
+    username                = fields.Str(allow_none = False)
+    bio                     = fields.Str(load_default = "", allow_none = True)
+    vehicle_information     = fields.Str(allow_none = False)
 
     @validates("username")
     def validate_username(self, value):
@@ -217,6 +230,7 @@ class RequestSetupProfileSchema(Schema):
     def validate_bio(self, value):
         """Validate the requested bio.
         The bio, if provided, must be no longer than 250 characters.
+        
         Raises
         ------
         ValidationError
@@ -225,6 +239,15 @@ class RequestSetupProfileSchema(Schema):
             LOG.error(f"Failed to setup social account, bio was too long!")
             raise ValidationError("bio-too-long")
 
+    @validates("vehicle_information")
+    def validate_vehicle_information(self, value):
+        """Validate the User's vehicle information."""
+        pass
+    
+    @post_load
+    def request_setup_profile_post_load(self, data, **kwargs) -> RequestSetupProfile:
+        return RequestSetupProfile(**data)
+
 
 def login_local_account(request_login_local, **kwargs) -> models.User:
     """Login the given user and run logic associated with logging in. This function will also ensure the User has been verified; both by their account's creation status and by
@@ -232,7 +255,7 @@ def login_local_account(request_login_local, **kwargs) -> models.User:
 
     Arguments
     ---------
-    :request_login_local: A loaded RequestLoginLocalSchema containing login parameters.
+    :request_login_local: An instance of RequestLoginLocal.
 
     Raises
     ------
@@ -245,17 +268,13 @@ def login_local_account(request_login_local, **kwargs) -> models.User:
     -------
     The User."""
     try:
-        # Grab email, password and remember me flag from the request.
-        email_address = request_login_local.get("email_address", None)
-        password = request_login_local.get("password", None)
-        remember_me = request_login_local.get("remember_me", False)
         # Now, search for a User that owns this email address.
-        target_user = models.User.search( email_address = email_address )
+        target_user = models.User.search( email_address = request_login_local.email_address )
         if not target_user:
-            LOG.error(f"Failed to login local account; no User for email; {email_address}")
+            LOG.error(f"Failed to login local account; no User for email; {request_login_local.email_address}")
             raise error.UnauthorisedRequestFail("incorrect-login")
         # Found the User, now check that the password verifies.
-        if not target_user.check_password(password):
+        if not target_user.check_password(request_login_local.password):
             LOG.error(f"Failed to login local account {target_user}; password was incorrect.")
             raise error.UnauthorisedRequestFail("incorrect-login")
         # Is the User disabled? If so, don't even log the User in.
@@ -264,7 +283,7 @@ def login_local_account(request_login_local, **kwargs) -> models.User:
             # Raise a critical error that will log the User out of their account on the client.
             raise error.AccountSessionIssueFail("disabled")
         # We can now log the User in.
-        if not login_user(target_user, remember = remember_me):
+        if not login_user(target_user, remember = request_login_local.remember_me):
             LOG.error(f"Failed to login local account {target_user}; login_user returned False!.")
             raise error.OperationalFail("unknown")
         """
@@ -314,7 +333,7 @@ def _create_account(request_new_account, **kwargs) -> models.User:
 
     Arguments
     ---------
-    :request_new_account: A loaded instance of any RequestNewAccountBaseSchema derivative; without the specifics.
+    :request_new_account: An instance of RequestNewAccount, or a subtype thereof.
 
     Keyword arguments
     -----------------
@@ -327,7 +346,9 @@ def _create_account(request_new_account, **kwargs) -> models.User:
         enabled = kwargs.get("enabled", True)
 
         # Create a new User with the request dictionary.
-        new_user = models.User(**request_new_account)
+        new_user = models.User()
+        new_user.set_email_address(request_new_account.email_address)
+        new_user.set_password(request_new_account.password)
         # Set the account enabled.
         new_user.set_enabled(enabled)
         db.session.add(new_user)
@@ -336,14 +357,14 @@ def _create_account(request_new_account, **kwargs) -> models.User:
         raise e
 
 
-def create_local_account(request_new_local_account, **kwargs) -> models.User:
+def create_local_account(request_local_account, **kwargs) -> models.User:
     """A registration request for a User. This will create a new User and prepare it for first time use. This function is specifically for accounts
     created via the HawkSpeed system. A loaded RequestNewLocalAccountSchema is expected. No validation is done within this function, this should
     be done prior to calling.
 
     Arguments
     ---------
-    :request_new_local_account: A loaded RequestNewLocalAccountSchema; with password & confirm password.
+    :request_local_account: An instance of RequestNewLocalAccount.
 
     Keyword arguments
     -----------------
@@ -357,13 +378,10 @@ def create_local_account(request_new_local_account, **kwargs) -> models.User:
         enabled = kwargs.get("enabled", True)
         verification_required = kwargs.get("verification_required", True)
 
-        # Pop both password & confirm_password.
-        password = request_new_local_account.pop("password")
-        confirm_password = request_new_local_account.pop("confirm_password")
         # Create the new User object.
-        new_user = _create_account(request_new_local_account, enabled = enabled)
+        new_user = _create_account(request_local_account, enabled = enabled)
         # Set the user's password.
-        new_user.set_password(password)
+        new_user.set_password(request_local_account.password)
         LOG.debug(f"Created a new localised account; {new_user}")
         # If we require verification, call out to require_verification.
         if verification_required:
@@ -394,14 +412,14 @@ def check_name_taken(username, **kwargs) -> bool:
         raise e
 
 
-def setup_account_profile(user, request_setup_profile_d, **kwargs) -> models.User:
+def setup_account_profile(user, request_setup_profile, **kwargs) -> models.User:
     """Setup the user's account for use in the social aspects of HawkSpeed. This will allow the user to set their username, bio, profile image.
     No validation is done within this function, please ensure this is done prior to calling.
 
     Arguments
     ---------
     :user: The User instance to setup profile account. The User must be verified.
-    :request_setup_profile_d: A loaded RequestSetupProfileSchema with the requested data.
+    :request_setup_profile: An instance of RequestSetupProfile.
 
     Raises
     ------
@@ -425,13 +443,12 @@ def setup_account_profile(user, request_setup_profile_d, **kwargs) -> models.Use
             LOG.error(f"Failed to setup account profile for {user}, they have already had their profile setup!")
             raise error.OperationalFail("profile-already-setup")
         # Get our input data.
-        username = request_setup_profile_d.get("username")
-        bio = request_setup_profile_d.get("bio")
-        #profile_image = request_setup_profile_d.get("profile_image")
+        #TODO: profile_image = request_setup_profile_d.get("profile_image")
         # Set the user's username.
-        user.set_username(username)
+        user.set_username(request_setup_profile.username)
         # Set the user's bio.
-        user.set_bio(bio)
+        user.set_bio(request_setup_profile.bio)
+        """TODO: vehicle information."""
         # Set profile setup.
         user.set_profile_setup(True)
         return user

@@ -162,13 +162,13 @@ class SerialiseViewModelField(fields.Field):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.dump_only = True
-        self.allow_none = True
 
     def _serialize(self, value, attr, obj, **kwargs):
-        if value is None:
-            return None
+        if value is None and not self.allow_none:
+            """TODO: implement properly."""
+            raise NotImplementedError("Failed to serialise view model, allow_none is False yet the given view model is None.")
         if not isinstance(value, SerialisableMixin):
-            raise Exception(f"Failed to serialise a view model, it doesn't implement SerialisableMixin; {value}")
+            raise TypeError(f"Failed to serialise a view model, it doesn't implement SerialisableMixin; {value}")
         # Get nested serialisation keyword args.
         nested_serialisation_kwargs = value.get_nested_serialisation_kwargs() or dict()
         # Otherwise, if not many, then return value serialised.
@@ -182,11 +182,7 @@ class SerialiseViewModelField(fields.Field):
 class BaseViewModel(SerialisableMixin):
     """A base class representing an entity view model."""
     class BaseViewSchema(Schema):
-        uid                 = fields.Str()
-
-    @property
-    def uid(self):
-        return self.patient.uid
+        pass
 
     @property
     def can_view(self):
@@ -271,16 +267,59 @@ class LeaderboardEntryViewModel(BaseViewModel):
         return LeaderboardEntryViewModel.LeaderboardEntryViewSchema(**kwargs).dump(self)
 
 
-class TrackViewModel(BaseViewModel):
-    """A view model that provides detail functionality specifically for Track entities."""
-    class TrackPathSchema(Schema):
-        """A response schema containing all points, each serialised through TrackPointSchema. This schema should have the Track model dumped through it."""
-        uid                 = fields.Str(data_key = "track_uid")
-        points              = fields.List(fields.Nested(tracks.TrackPointSchema, many = False))
+class TrackPathViewModel(BaseViewModel):
+    """A view model that provides functionality for a Track's path."""
+    class TrackPathViewSchema(BaseViewModel.BaseViewSchema):
+        """A schema that can be used to serialise a track's path."""
+        class Meta:
+            unknown = EXCLUDE
+        # The owning Track's UID. Can't be None.
+        track_uid           = fields.Str(allow_none = False)
+        # The track path's CRS. Can't be None.
+        crs                 = fields.Int(allow_none = False)
+        # All points belonging to this track's path.
+        points              = fields.List(fields.Nested(tracks.TrackPointSchema, many = False), allow_none = False)
 
+    @property
+    def track_uid(self):
+        return self.patient.uid
+    
+    @property
+    def crs(self):
+        """Return the CRS this track path is currently in."""
+        """TODO: improve this, it does not actually return the geodetic CRS, just the normal one for storage."""
+        return self.patient.crs
+    
+    @property
+    def points(self):
+        """Returns a list of dictionaries, where each entry contains track uid, longitude and a latitude."""
+        """TODO: improve this."""
+        try:
+            # Get the multi line string geometry (geodetic) from the patient entity.
+            geodetic_multi_linestring = self.patient.geodetic_multi_linestring
+            """TODO: for now, there is only a single linestring in the multilinestring, since we only support single segment tracks."""
+            geodetic_linestring = geodetic_multi_linestring.geoms[0]
+            # Create a list of dictionaries where each entry is a track point.
+            return [dict(
+                track_uid = self.track_uid, longitude = pt[0], latitude = pt[1]
+            ) for pt in geodetic_linestring.coords]
+        except Exception as e:
+            LOG.error(e, exc_info = True)
+            raise e
+    
+    def serialise(self, **kwargs):
+        """Serialise and return this track path view model."""
+        schema = self.TrackPathViewSchema(**kwargs)
+        return schema.dump(self)
+    
+
+class TrackViewModel(BaseViewModel):
+    """A view model that provides detail functionality specifically for Track entities.""" 
     class TrackViewSchema(BaseViewModel.BaseViewSchema):
         """A schema for representing the information sent back as Track detail."""
         ### First, information about the Track ###
+        # The track's UID. Can't be None.
+        uid                 = fields.Str(equired = True, allow_none = False)
         # The Track's name. Can't be None.
         name                = fields.Str(required = True, allow_none = False)
         # The Track's description. Can't be None.
@@ -292,12 +331,16 @@ class TrackViewModel(BaseViewModel):
         # The track's start point. Can't be None.
         start_point         = fields.Nested(tracks.TrackPointSchema, many = False, required = True, allow_none = False)
         # Is this track verified? Can't be None.
-        verified            = fields.Bool(required = True, allow_none = False)
-        """TODO: ratings"""
-        """TODO: comments"""
+        is_verified         = fields.Bool(required = True, allow_none = False)
+        # This track's ratings. Can't be None.
+        ratings             = fields.Nested(tracks.RatingsSchema, many = False, allow_none = False)
+        # The actor's disposition toward the Track, can be None; which means the actor has not voted.
+        your_rating         = fields.Bool(required = True, allow_none = True)
+        # The number of comments on this Track. Can't be None.
+        num_comments        = fields.Int(required = True, allow_none = False)
 
         ### Abilities. ###
-        # Can the actor race this track? Can't be None.
+        # Is the actor approved to race this track? Can't be None.
         can_race            = fields.Bool(required = True, allow_none = False)
         # Can the actor edit this track? Can't be None.
         can_edit            = fields.Bool(required = True, allow_none = False)
@@ -305,52 +348,62 @@ class TrackViewModel(BaseViewModel):
         can_delete          = fields.Bool(required = True, allow_none = False)
 
     @property
+    def uid(self):
+        return self.patient.uid
+    
+    @property
     def name(self):
+        """Return the track's name."""
         return self.patient.name
 
     @property
     def description(self):
+        """Return the track's description."""
         return self.patient.description
 
     @property
     def owner(self):
-        """Return a view model for this track's owner."""
-        try:
-            return UserViewModel(self.actor, self.patient.user)
-        except Exception as e:
-            LOG.error(e, exc_info = True)
-            raise e
+        """Return a view model for this track's owner. If there is no owner, this will return None."""
+        if not self.patient.has_owner:
+            return None
+        return UserViewModel(self.actor, self.patient.user)
 
     @property
-    def path(self):
-        """Return the TrackPath object for this track."""
-        return self.patient.path
+    def path(self) -> TrackPathViewModel:
+        """Return a track path view model for this track's path."""
+        return TrackPathViewModel(self.actor, self.patient.path)
 
     @property
     def start_point(self):
         """Return a dictionary, containing the longitude and latitude (in 4326) of the first point."""
+        """TODO: improve this, return an object instead of a dictionary."""
         try:
             geodetic_point = self.patient.geodetic_point.coords[0]
             return dict(track_uid = self.uid, longitude = geodetic_point[0], latitude = geodetic_point[1])
         except Exception as e:
+            print("Start point failure")
             LOG.error(e, exc_info = True)
             raise e
 
     @property
-    def points(self):
-        """Returns a list of dictionaries, where each entry contains track uid, longitude and a latitude."""
-        try:
-            # Get the multilinestring geometry from the patient entity.
-            geodetic_multi_linestring = self.path.geodetic_multi_linestring
-            """TODO: for now, there is only a single linestring in the multilinestring, since we only support single segment tracks."""
-            return [dict(track_uid = self.uid, longitude = pt[0], latitude = pt[1]) for pt in geodetic_multi_linestring.geoms[0].coords]
-        except Exception as e:
-            LOG.error(e, exc_info = True)
-            raise e
-
+    def is_verified(self):
+        """Return True if this track is verified."""
+        return self.patient.is_verified
+    
     @property
-    def verified(self):
-        return self.patient.verified
+    def ratings(self):
+        """Returns a Ratings object for this Track."""
+        return tracks.get_ratings_for(self.patient)
+    
+    @property
+    def your_rating(self):
+        """Returns True if the actor has voted for this Track, or False otherwise. None is returned if no vote has been placed."""
+        return tracks.get_user_vote(self.patient, self.actor)
+    
+    @property
+    def num_comments(self):
+        """Returns the number of comments on this Track."""
+        return self.patient.num_comments
 
     @property
     def can_race(self):
@@ -375,10 +428,6 @@ class TrackViewModel(BaseViewModel):
         A dumped instance of TrackViewSchema."""
         return TrackViewModel.TrackViewSchema(**kwargs).dump(self)
 
-    def serialise_path(self, **kwargs):
-        """Serialise this track's path. This will return a dumped instance of TrackPathSchema."""
-        return TrackViewModel.TrackPathSchema(**kwargs).dump(self)
-
     def page_leaderboard(self, page = 1, **kwargs) -> ViewModelPagination:
         """Page the leaderboard for this track. This will query a list of of TrackUserRace instances from this track, ordered to reflect fastest to slowest.
         This function will return a ViewModelPagination instance for the requested page.
@@ -397,13 +446,32 @@ class TrackViewModel(BaseViewModel):
                 LeaderboardEntryViewModel)
         except Exception as e:
             raise e
+        
+    def page_comments(self, page = 1, **kwargs) -> ViewModelPagination:
+        """Page the comments for this track. This will query a list of of TrackComment instances from this track.
+        This function will return a ViewModelPagination instance for the requested page.
+
+        Arguments
+        ---------
+        :page: The page to get from the comments section.
+
+        Returns
+        -------
+        A ViewModelPagination object."""
+        try:
+            """TODO: a comments view model."""
+            raise NotImplementedError()
+        except Exception as e:
+            raise e
 
 
 class UserViewModel(BaseViewModel):
-    """A view model that provides profile functionality specifically for User entities."""
+    """A view model that provides profile functionality specifically for other User entities."""
     class UserViewSchema(BaseViewModel.BaseViewSchema):
         """A schema for representing the information sent back as User detail when other Users query it."""
         ### First, information about the User ###
+        # The user's UID. Can't be None.
+        uid                 = fields.Str(required = True, allow_none = False)
         # The user's username. Can't be None, since the User who is not setup should never be a result in any query done by other Users.
         username            = fields.Str(required = True, allow_none = False)
         # The user's privilege integer. Can never be None.
@@ -414,7 +482,13 @@ class UserViewModel(BaseViewModel):
         is_bot              = fields.Bool(required = True, allow_none = False)
         # Whether this user IS the actor, can never be None.
         is_you              = fields.Bool(required = True, allow_none = False)
+        # Whether the user's currently playing.
+        is_playing          = fields.Bool(required = True, allow_none = False)
 
+    @property
+    def uid(self):
+        return self.patient.uid
+    
     @property
     def username(self):
         return self.patient.username
@@ -432,6 +506,11 @@ class UserViewModel(BaseViewModel):
         # This is us if actor matches patient.
         return self.actor == self.patient
 
+    @property
+    def is_playing(self):
+        """Returns True if the User is currently playing. That is, is connected to the game."""
+        return self.patient.is_playing
+    
     def serialise(self, **kwargs):
         """Serialise and return a UserViewSchema representing the view relationship between the actor entity and the patient User.
 
@@ -449,6 +528,8 @@ class AccountViewModel(BaseViewModel):
     class AccountViewSchema(BaseViewModel.BaseViewSchema):
         """A schema for representing the information sent back as detail to be managed."""
         ### First, information about the User ###
+        # The user's UID. Can't be None.
+        uid                 = fields.Str(required = True, allow_none = False)
         # The user's email address. Can never be None.
         email_address       = fields.Str(required = True, allow_none = False)
         # The user's username. Can be None, if profile is not setup.
@@ -458,16 +539,20 @@ class AccountViewModel(BaseViewModel):
 
         ### Second, state data. ###
         # Whether this User's account is verified. Can't be None.
-        account_verified    = fields.Bool(required = True, allow_none = False)
+        is_account_verified = fields.Bool(required = True, allow_none = False)
         # Whether this User's password is verified. Can't be None.
-        password_verified   = fields.Bool(required = True, allow_none = False)
+        is_password_verified= fields.Bool(required = True, allow_none = False)
         # Whether this User is set up or not. Can't be None.
-        profile_setup       = fields.Bool(required = True, allow_none = False)
+        is_profile_setup    = fields.Bool(required = True, allow_none = False)
 
         ### Abilities. ###
         # Can this User create new tracks? Can't be None.
         can_create_tracks   = fields.Bool(required = True, allow_none = False)
 
+    @property
+    def uid(self):
+        return self.patient.uid
+    
     @property
     def email_address(self):
         return self.patient.email_address
@@ -481,15 +566,15 @@ class AccountViewModel(BaseViewModel):
         return self.patient.privilege
 
     @property
-    def account_verified(self):
+    def is_account_verified(self):
         return self.patient.is_account_verified
 
     @property
-    def password_verified(self):
+    def is_password_verified(self):
         return self.patient.is_password_verified
 
     @property
-    def profile_setup(self):
+    def is_profile_setup(self):
         return self.patient.is_profile_setup
 
     @property

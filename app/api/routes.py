@@ -5,12 +5,11 @@ import time
 import logging
 from datetime import date, datetime
 
-from flask import request, render_template, redirect, flash, url_for, send_from_directory, abort, jsonify, g
-from flask_login import current_user, login_user, logout_user, login_required
-from marshmallow import Schema, fields, validate, ValidationError, post_load, pre_load, EXCLUDE
-from werkzeug.exceptions import RequestEntityTooLarge
+from flask import request
+from flask_login import current_user, logout_user, login_required
+from marshmallow import ValidationError
 
-from .. import db, config, login_manager, models, decorators, error, account, viewmodel
+from .. import db, config, models, decorators, error, account, viewmodel
 from . import api
 
 LOG = logging.getLogger("hawkspeed.api.routes")
@@ -31,11 +30,11 @@ def authenticate(**kwargs):
                 LOG.error(f"{request.remote_addr} failed to authenticate; invalid authorization header.")
                 raise error.UnauthorisedRequestFail("bad-auth-header")
             # Load and login the account from the auth header.
-            request_login_local = account.RequestLoginLocalSchema().load(dict(
+            request_login_local_schema = account.RequestLoginLocalSchema()
+            request_login_local = request_login_local_schema.load(dict(
                 email_address = authorization.get("username"),
                 password = authorization.get("password"),
-                remember_me = True
-            ))
+                remember_me = True))
             # Use the account module to login, then commit whatever changes were made.
             logged_in_user = account.login_local_account(request_login_local)
             db.session.commit()
@@ -85,7 +84,8 @@ def register_local_account(**kwargs):
     try:
         """TODO: first, some controls on registration here. Ensure the User can actually register new accounts"""
         # The User wishes to register a new local account. This means the JSON contents can be loaded into a RequestNewLocalAccountSchema.
-        request_local_account = account.RequestNewLocalAccountSchema().load(request.json)
+        request_local_account_schema = account.RequestNewLocalAccountSchema()
+        request_local_account = request_local_account_schema.load(request.json)
         # Attempt to create a new account with this.
         new_account = account.create_local_account(request_local_account)
         LOG.debug(f"{current_user} successfully registered a new account via HawkSpeed! ({new_account.email_address})")
@@ -112,8 +112,7 @@ def check_username_taken(username, **kwargs):
         schema = account.CheckNameResponseSchema()
         return schema.dump(dict(
             username = username,
-            is_taken = is_taken
-        )), 200
+            is_taken = is_taken)), 200
     except Exception as e:
         raise e
 
@@ -130,9 +129,10 @@ def setup_profile(**kwargs):
             setup_profile_user = current_user
         else:
             # Otherwise, load a RequestSetupProfileSchema from the JSON body.
-            request_setup_profile_d = account.RequestSetupProfileSchema().load(request.json)
+            request_setup_profile_schema = account.RequestSetupProfileSchema()
+            request_setup_profile = request_setup_profile_schema.load(request.json)
             # Now, use account module to setup the user's account.
-            setup_profile_user = account.setup_account_profile(current_user, request_setup_profile_d)
+            setup_profile_user = account.setup_account_profile(current_user, request_setup_profile)
             LOG.debug(f"Successfully setup account profile for {current_user}")
             db.session.commit()
         # Instantiate a new account view model, and return its serialisation.
@@ -146,7 +146,8 @@ def setup_profile(**kwargs):
 @decorators.account_setup_required()
 @decorators.get_track(should_belong_to_user = False)
 def get_track(track, **kwargs):
-    """Perform a GET request with a track's UID to get its detail here. The User must be authenticated and their profile must be set up for them to have access to this."""
+    """Perform a GET request with a track's UID to get its detail here. The User must be authenticated and their profile must be set up for them to have access to this.
+    This route will not return the track with its path, just the track's view model serialised."""
     try:
         # Once we've got the track instance, we will instantiate a track view model, and return its serialisation.
         track_view_model = viewmodel.TrackViewModel(current_user, track)
@@ -155,6 +156,25 @@ def get_track(track, **kwargs):
     except Exception as e:
         raise e
 
+
+@api.route("/api/v1/track/<track_uid>/path", methods = [ "GET" ])
+@decorators.account_setup_required()
+@decorators.get_track(should_belong_to_user = False)
+def get_track_with_path(track, **kwargs):
+    """Perform a GET request with a track's UID to get it alongside its full path. The User must be authenticated and their profile must be set up for them to have access
+    to this. This route will return a JSON object that contains the serialised track view model as well as a serialised track path view model."""
+    try:
+        # Once we've got the track instance, we will instantiate a track view model.
+        track_view_model = viewmodel.TrackViewModel(current_user, track)
+        # Get a view model for the path.
+        track_path_view_Model = track_view_model.path
+        # Now, return an object that contains both the serialised track and track path view models.
+        return dict(
+            track = track_view_model.serialise(),
+            track_path = track_path_view_Model.serialise()), 200
+    except Exception as e:
+        raise e
+    
 
 @api.route("/api/v1/track/<track_uid>/leaderboard", methods = [ "GET" ])
 @decorators.account_setup_required()
@@ -170,22 +190,7 @@ def page_track_leaderboard(track, **kwargs):
         leaderboard_sp = track_view_model.page_leaderboard(page)
         # Now, return this as a paged response, providing a base dict containing the serialised track view model, too.
         return leaderboard_sp.as_paged_response(base_dict = dict(
-            track = track_view_model.serialise()
-        )), 200
-    except Exception as e:
-        raise e
-
-
-@api.route("/api/v1/track/<track_uid>/path", methods = [ "GET" ])
-@decorators.account_setup_required()
-@decorators.get_track(should_belong_to_user = False)
-def get_track_path(track, **kwargs):
-    """Perform a GET request with a track's UID to get its full path. The User must be authenticated and their profile must be set up for them to have access to this."""
-    try:
-        # Once we've got the track instance, we will instantiate a track view model. From it, we'll return the path's object.
-        track_view_model = viewmodel.TrackViewModel(current_user, track)
-        # Return the serialisation of the track path.
-        return track_view_model.serialise_path(), 200
+            track = track_view_model.serialise())), 200
     except Exception as e:
         raise e
 

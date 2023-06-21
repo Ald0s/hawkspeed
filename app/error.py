@@ -27,6 +27,7 @@ class PubliclyCompatibleException(Exception):
 
 """Server-only errors. These do not implement PubliclyCompatibleException at all."""
 class AccountActionNeeded(Exception):
+    """An exception that communicates an issue with the given User's account that must be resolved."""
     def __init__(self, _user, _action_needed_category_code, _action_needed_code, **kwargs):
         self.user = _user
         self.action_needed_code = _action_needed_code
@@ -34,32 +35,8 @@ class AccountActionNeeded(Exception):
 
 
 class SocketIOUserNotAuthenticated(Exception):
+    """"""
     pass
-
-
-class TrackAlreadyExists(Exception):
-    pass
-
-
-class TrackInspectionFailed(Exception):
-    """An exception that communicates a failure in the inspection/validation portion of creating a new track."""
-    def __init__(self, error_code, **kwargs):
-        self.error_code = error_code
-        self.extra_info = kwargs.get("extra_info", None)
-
-
-class RaceDisqualifiedError(Exception):
-    """An exception to raise that will cause the disqualification of the given race for the given reason."""
-    def __init__(self, user, track_user_race, **kwargs):
-        self.user = user
-        self.track_user_race = track_user_race
-        self.dq_code = kwargs.get("dq_code", "no-reason-given")
-        self.dq_extra_info = kwargs.get("dq_extra_info", dict())
-
-
-class PlayerDodgedTrackError(Exception):
-    def __init__(self, percentage_dodged, **kwargs):
-        self.percentage_dodged = percentage_dodged
 
 
 class NoServerConfigurationError(Exception):
@@ -106,6 +83,40 @@ class DeviceIssueFail(PubliclyCompatibleException):
             "error-code": self.error_code
         }
 
+
+"""Socket errors"""
+class JoinWorldRefusedError(PubliclyCompatibleException):
+    """A serialisable exception that communicates a User's attempt to join the world has been refused. This will only ever be raised in on_connect. Reason code
+    can be any reason found in ParsePlayerJoinedError."""
+    def __init__(self, reason_code, extra_args = dict(), **kwargs):
+        self.reason_code = reason_code
+        self.extra_args = extra_args
+
+    def get_error_name(self):
+        return "join-world-refused"
+
+    def get_error_dict(self):
+        return {
+            "reason": self.reason,
+            "extra-args": self.extra_args
+        }
+    
+    
+class KickedFromWorldError(PubliclyCompatibleException):
+    """A serialisable exception that informs the client they've been kicked from the world. Reason can be any reason code from ParsePlayerUpdateError."""
+    def __init__(self, reason, extra_args = dict(), **kwargs):
+        self.reason = reason
+        self.extra_args = extra_args
+
+    def get_error_name(self):
+        return "kicked-from-world"
+
+    def get_error_dict(self):
+        return {
+            "reason": self.reason,
+            "extra-args": self.extra_args
+        }
+    
 
 """Local errors"""
 class OperationalFail(PubliclyCompatibleException):
@@ -223,3 +234,29 @@ class GlobalAPIError(APIErrorWrapper):
     """
     def __init__(self, _publicly_compatible_exception, _http_error_code, **kwargs):
         super().__init__("global-error", _publicly_compatible_exception, _http_error_code)
+
+
+class SocketErrorWrapper(Exception):
+    """Provides a base for errors that should be compatible with HawkSpeed socket IO clients. This is almost the same as the API error, but lacks
+    HTTP specific information."""
+    def __init__(self, _severity, _publicly_compatible_exception, **kwargs):
+        self.severity = _severity
+        if not isinstance(_publicly_compatible_exception, PubliclyCompatibleException):
+            """Totally broken now, good luck recovering."""
+            raise Exception(f"{_publicly_compatible_exception} is not an instance of PubliclyCompatibleException!")
+        self.compat_exception = _publicly_compatible_exception
+
+    def to_dict(self) -> dict:
+        """Turns the contents of this object into a dictionary, ready to be sent."""
+        return dict(
+            severity = self.severity,
+            name = self.compat_exception.get_error_name(),
+            error = self.compat_exception.get_error_dict()
+        )
+
+
+class LocalSocketError(SocketErrorWrapper):
+    """A local socket error, this is in response to a single request from the client's device. This is the lowest severity, and the error
+    will not be propogated anywhere past the clientside locale from where the request was created."""
+    def __init__(self, _publicly_compatible_exception, **kwargs):
+        super().__init__("local-error", _publicly_compatible_exception)

@@ -9,6 +9,8 @@ import string
 import json
 import binascii
 import hashlib
+
+from typing import List, Optional
 from datetime import datetime, date, timedelta, timezone
 
 # All imports for geospatial aspect.
@@ -18,12 +20,15 @@ from geoalchemy2 import Geometry, shape
 
 from flask_login import AnonymousUserMixin, UserMixin, current_user
 from flask import request, g
-from sqlalchemy import asc, desc, or_, and_, func, select, case
-from sqlalchemy.orm import relationship, aliased, with_polymorphic, declared_attr, column_property, query_expression
+from sqlalchemy import asc, desc, or_, and_, func, select, case, insert, union_all
+from sqlalchemy import Table, Column, BigInteger, Boolean, Date, DateTime, Numeric, String, Text, PickleType, ForeignKey, ForeignKeyConstraint
+from sqlalchemy.types import TypeDecorator, CHAR
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship, aliased, Mapped, mapped_column, with_polymorphic, declared_attr, column_property, query_expression
 from sqlalchemy.sql.expression import cast
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.hybrid import hybrid_property, hybrid_method
-from sqlalchemy.ext.associationproxy import association_proxy
+from sqlalchemy.ext.associationproxy import association_proxy, AssociationProxy
 from sqlalchemy.event import listens_for
 from sqlite3 import IntegrityError as SQLLite3IntegrityError
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -33,6 +38,50 @@ from . import db, config, login_manager, error, compat
 
 LOG = logging.getLogger("hawkspeed.models")
 LOG.setLevel( logging.DEBUG )
+
+
+class GUID(TypeDecorator):
+    """https://gist.github.com/gmolveau/7caeeefe637679005a7bb9ae1b5e421e
+    Platform-independent GUID type.
+    Uses PostgreSQL's UUID type, otherwise uses
+    CHAR(32), storing as stringified hex values."""
+    impl = CHAR
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == 'postgresql':
+            return dialect.type_descriptor(UUID())
+        else:
+            return dialect.type_descriptor(CHAR(32))
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return value
+        elif dialect.name == 'postgresql':
+            return str(value)
+        else:
+            if not isinstance(value, uuid.UUID):
+                try:
+                    return "%.32x" % uuid.UUID(value).int
+                except ValueError as ve:
+                    return None
+            else:
+                # hexstring
+                return "%.32x" % value.int
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return value
+        if isinstance(value, uuid.UUID):
+            return value.hex.lower()
+        return value
+
+
+class HasUUIDMixin():
+    """A mixin that grants implementing types a UUID."""
+    __abstract__ = True
+
+    uid = mapped_column(GUID(), unique = True, default = lambda: uuid.uuid4().hex.lower())
 
 
 class EPSGWrapperMixin():
@@ -48,8 +97,9 @@ class EPSGWrapperMixin():
         return pyproj.Transformer.from_crs(self.crs_object, self.crs_object.geodetic_crs, always_xy = True)
 
     @declared_attr
-    def crs(cls):
-        return db.Column(db.Integer, nullable = True, default = None)
+    def crs(cls) -> Mapped[int]:
+        #return db.Column(db.Integer, nullable = True, default = None)
+        return mapped_column(nullable = True, default = None)
 
     def set_crs(self, crs):
         self.crs = crs
@@ -242,49 +292,48 @@ class TrackUserRace(db.Model, LineStringGeometryMixin):
     This model also represents a single line string, which is a geometry of the User's progress through the track."""
     __tablename__ = "track_user_race"
 
-    track_id                = db.Column(db.Integer, db.ForeignKey("track.id", ondelete = "CASCADE"), primary_key = True, nullable = False)
-    user_id                 = db.Column(db.Integer, db.ForeignKey("user_.id", ondelete = "CASCADE"), primary_key = True, nullable = False)
-    uid                     = db.Column(db.String(65), unique = True, default = lambda: uuid.uuid4().hex.lower(), primary_key = True, nullable = False)
+    # A composite primary key that involves the track being raced, the User doing the racing, and a UID; which uniquely identifies this particular track/user race instance, so
+    # the User can have multiple attempts.
+    track_id: Mapped[int] = mapped_column(ForeignKey("track.id", ondelete = "CASCADE"), primary_key = True, nullable = False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_.id", ondelete = "CASCADE"), primary_key = True, nullable = False)
+    uid: Mapped[str] = mapped_column(GUID(), primary_key = True, default = lambda: uuid.uuid4().hex.lower())
 
     # A query expression which, at query time, is to be filled with a window function that queries this race's place in the leaderboard. This should only be with'd on
     # races that are finished, that is, finished is True.
-    finishing_place         = query_expression()
+    finishing_place = query_expression()
     # When this race was started; in milliseconds. This is said to be when the User's client communicates their intent to begin the race. Can't be None.
-    started                 = db.Column(db.BigInteger, nullable = False, default = lambda: time.time() * 1000)
+    started: Mapped[int] = mapped_column(BigInteger(), nullable = False, default = lambda: time.time() * 1000)
     # When this race was completed; in milliseconds. This is said to be when the server determines the race was completed successfully.
-    finished                = db.Column(db.BigInteger, nullable = True, default = None)
+    finished: Mapped[int] = mapped_column(BigInteger(), nullable = True, default = None)
     # If this race was disqualified. Can't be None.
-    disqualified            = db.Column(db.Boolean, nullable = False, default = False)
+    disqualified: Mapped[bool] = mapped_column(nullable = False, default = False)
     # The reason for this race's disqualification. Can be None.
-    dq_reason               = db.Column(db.String(32), nullable = True, default = None)
+    dq_reason: Mapped[str] = mapped_column(String(32), nullable = True, default = None)
     # Extra info for the disqualification; this is JSON stored as a string. Can be None.
-    dq_extra_info_          = db.Column(db.Text, nullable = True, default = None)
+    dq_extra_info_: Mapped[str] = mapped_column(Text(), nullable = True, default = None)
     # If this race has been cancelled. Can't be None.
-    cancelled               = db.Column(db.Boolean, nullable = False, default = False)
-    # Average speed, in meters per hour.
-    average_speed           = db.Column(db.Integer, nullable = True, default = None)
-    # The time taken thus far, in milliseconds.
-    stopwatch               = db.Column(db.Integer, nullable = True, default = None)
+    cancelled: Mapped[bool] = mapped_column(nullable = False, default = False)
+    # Average speed, in meters per hour. Can be None.
+    average_speed: Mapped[int] = mapped_column(nullable = True, default = None)
+    # The time taken thus far, in milliseconds. Can be None.
+    stopwatch: Mapped[int] = mapped_column(nullable = True, default = None)
 
-    # An association proxy for the Track's UID.
-    track_uid               = association_proxy("track", "uid")
+    # An association proxy for the Track's UID, which is actually the track's hash.
+    track_uid: AssociationProxy["Track"] = association_proxy("track", "uid")
 
     # All UserLocation instances logged by the User at the time this track was being raced. This is an eager relationship, and the referred UserLocation objects can only
     # be deleted if the User or the TrackUserRace instances are deleted. The race progress is loaded in order from start to finish (ascending.)
-    progress                = db.relationship(
-        "UserLocation",
+    progress: Mapped[List["UserLocation"]] = relationship(
         back_populates = "track_user_race",
         uselist = True,
         order_by = "asc(UserLocation.logged_at)",
         secondary = "user_location_race")
     # The Track being raced.
-    track                   = db.relationship(
-        "Track",
+    track: Mapped["Track"] = relationship(
         back_populates = "races_",
         uselist = False)
     # The User doing the racing.
-    user                    = db.relationship(
-        "User",
+    user: Mapped["User"] = relationship(
         back_populates = "races_",
         uselist = False)
 
@@ -400,18 +449,22 @@ class TrackPath(db.Model, MultiLineStringGeometryMixin):
     This is associated with at most one Track instance."""
     __tablename__ = "track_path"
 
-    id                      = db.Column(db.Integer, primary_key = True)
-    track_id                = db.Column(db.Integer, db.ForeignKey("track.id", ondelete = "CASCADE"))
+    id: Mapped[int] = mapped_column(primary_key = True)
+    track_id: Mapped[int] = mapped_column(ForeignKey("track.id", ondelete = "CASCADE"))
 
     # The track this path belongs to. Can't be None.
-    track                   = db.relationship(
-        "Track",
+    track: Mapped["Track"] = relationship(
         back_populates = "path_",
         uselist = False)
 
     def __repr__(self):
         return f"TrackPath<for={self.track.name}>"
 
+    @property
+    def uid(self):
+        """Returns the track path's UID, for now, this is just the Track's UID."""
+        return self.track.uid
+    
     @property
     def start_point(self):
         """Return the Shapely Point at the very start of the track, or None if not yet set."""
@@ -428,45 +481,101 @@ class TrackPath(db.Model, MultiLineStringGeometryMixin):
         return geometry.Point(last_linestring.coords[len(last_linestring.coords)-1])
 
 
+class TrackComment(db.Model):
+    """A model that represents a comment created by a User toward a track. There can be multiple Comments by a single User toward a Track, therefore we will employ
+    a third attribute as part of our composite key; a UID."""
+    __tablename__ = "track_comment"
+
+    # Composite primary key, involving the track and user models, as well as a UID. Both track and user references will cascade on delete, hopefully deleting the
+    # rating if either the User or track is deleted.
+    track_id: Mapped[int] = mapped_column(ForeignKey("track.id", ondelete = "CASCADE"), primary_key = True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_.id", ondelete = "CASCADE"), primary_key = True)
+    uid: Mapped[str] = mapped_column(GUID(), primary_key = True, default = lambda: uuid.uuid4().hex.lower())
+    
+    # A timestamp, in seconds, when this comment was created. Can't be None.
+    created: Mapped[int] = mapped_column(BigInteger(), nullable = False, default = time.time)
+    # The comment's text. Can't be None.
+    text: Mapped[str] = mapped_column(Text(), nullable = False)
+
+    # The User that created this comment. Can't be None.
+    user: Mapped["User"] = relationship(
+        back_populates = "track_comments_",
+        uselist = False)
+    # The Track being commented on. Can't be None.
+    track: Mapped["Track"] = relationship(
+        back_populates = "comments_",
+        uselist = False)
+    
+    def __repr__(self):
+        return f"TrackComment<{self.user},{self.track}>"
+    
+
+class TrackRating(db.Model):
+    """A model that represents a rating created by a User toward a track. There can be at most one User/Track rating, and this rating can hold a positive or
+    negative value, which will evaluate to a like or a dislike."""
+    __tablename__ = "track_rating"
+
+    # Composite primary key, involving the track and user models. Both will cascade on delete, hopefully deleting the rating if either the User or track is deleted.
+    track_id: Mapped[int] = mapped_column(ForeignKey("track.id", ondelete = "CASCADE"), primary_key = True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_.id", ondelete = "CASCADE"), primary_key = True)
+    # The actual rating. This is a boolean; True for like, False for dislike. There is no default, and this can't be None.
+    rating: Mapped[bool] = mapped_column(nullable = False)
+
+    # The User that created this rating. Can't be None.
+    user: Mapped["User"] = relationship(
+        back_populates = "track_ratings_",
+        uselist = False)
+    # The Track being rated. Can't be None.
+    track: Mapped["Track"] = relationship(
+        back_populates = "ratings_",
+        uselist = False)
+    
+    def __repr__(self):
+        return f"TrackRating<{self.user},{self.track},r={self.rating}>"
+
+
 class Track(db.Model, PointGeometryMixin):
     """A track created and uploaded by a User. This implements the point geometry mixin, which will refer to the start point of the track. Also, a one-to-one
     relationship with the track path represents the actual track. This model is on a dynamic load strategy for query speed reasons."""
     __tablename__ = "track"
 
-    id                      = db.Column(db.Integer, primary_key = True)
-    user_id                 = db.Column(db.Integer, db.ForeignKey("user_.id", ondelete = "CASCADE"))
+    id: Mapped[int] = mapped_column(primary_key = True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_.id", ondelete = "CASCADE"), nullable = True)
 
     # A hash of this track, this is used to uniquely identify this track. This can't be None.
-    track_hash              = db.Column(db.String(256), nullable = False)
+    track_hash: Mapped[str] = mapped_column(String(256), nullable = False, unique = True)
     # Images for this track.
     """TODO: images for the track here."""
     # The track's name, can't be None.
-    name                    = db.Column(db.String(64), nullable = False)
+    name: Mapped[str] = mapped_column(String(64), nullable = False)
     # The track's description, can't be None.
-    description             = db.Column(db.String(256), nullable = False)
-    # This track's leaderboard.
-    """TODO: leaderboard for the track."""
-    # The ratings given by Users to this track.
-    """TODO: ratings for the track."""
-    # The comments given by Users to this track.
-    """TODO: comments for the track."""
-    # Whether this track has been verified. Default is False.
-    verified                = db.Column(db.Boolean, default = False)
+    description: Mapped[str] = mapped_column(String(256), nullable = False)
+    # Whether this track has been verified. Default is False, can't be None.
+    verified: Mapped[bool] = mapped_column(nullable = False, default = False)
 
-    # The User that owns this track. Can't be None.
-    user                    = db.relationship(
-        "User",
+    # The ratings given by Users to this track, as a dynamic relationship. Unordered.
+    ratings_: Mapped[List[TrackRating]] = relationship(
+        back_populates = "track",
+        lazy = "dynamic",
+        uselist = True,
+        cascade = "all, delete")
+    # The comments given by Users to this track, as a dynamic relationship. Unordered.
+    comments_: Mapped[List[TrackComment]] = relationship(
+        back_populates = "track",
+        lazy = "dynamic",
+        uselist = True,
+        cascade = "all, delete")
+    # The User that owns this track. Can be None, but if its None, the track will not be visible.
+    user: Mapped["User"] = relationship(
         back_populates = "tracks_",
         uselist = False)
     # This track's path instance. This is a dynamic relationship so the entire path is not loaded on each query. Can't be None.
-    path_                   = db.relationship(
-        "TrackPath",
+    path_: Mapped["TrackPath"] = relationship(
         back_populates = "track",
         uselist = False,
         cascade = "all, delete")
-    # The races attached to this track, as a dynamic relationship.
-    races_                  = db.relationship(
-        "TrackUserRace",
+    # The races attached to this track, as a dynamic relationship. Unordered.
+    races_: Mapped[List["TrackUserRace"]] = relationship(
         back_populates = "track",
         uselist = True,
         lazy = "dynamic",
@@ -478,15 +587,56 @@ class Track(db.Model, PointGeometryMixin):
     @hybrid_property
     def uid(self):
         return self.track_hash
-
+    
+    @hybrid_property
+    def can_be_raced(self):
+        """Returns True if this track can be raced; that is, it is verified and has an owner. This boolean should be used to determine whether
+        this track appears on the world map."""
+        return self.is_verified and self.has_owner
+    
+    @can_be_raced.expression
+    def can_be_raced(cls):
+        """Expression level equivalent of can be raced."""
+        raise NotImplementedError()
+    
+    @hybrid_property
+    def is_verified(self):
+        return self.verified
+    
+    @property
+    def has_owner(self):
+        """Returns True if this Track has an owner."""
+        return self.user != None
+    
+    @property
+    def num_comments(self):
+        """Returns the total count of the comments relationship."""
+        return self.comments_.count()
+    
     @property
     def path(self):
         """Return the track's path."""
         return self.path_
 
+    def set_name(self, name):
+        """Set this track's name."""
+        self.name = name
+
+    def set_description(self, description):
+        """Set this track's description."""
+        self.description = description
+
+    def set_verified(self, verified):
+        """Set whether this track is verified."""
+        self.verified = verified
+
     def set_path(self, track_path):
         """Set this track's path. This should be an instance of TrackPath."""
         self.path_ = track_path
+    
+    def set_owner(self, user):
+        """Set the owner of this track to the given User."""
+        self.user = user
 
     @classmethod
     def find(cls, **kwargs):
@@ -507,20 +657,19 @@ class UserVerify(db.Model):
     """A model that will contain verification requests posted toward specific users."""
     __tablename__ = "user_verify"
 
-    id                      = db.Column(db.Integer, primary_key = True)
-    user_id                 = db.Column(db.Integer, db.ForeignKey("user_.id", ondelete = "CASCADE"))
+    id: Mapped[int] = mapped_column(primary_key = True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_.id", ondelete = "CASCADE"))
 
-    created                 = db.Column(db.DateTime, default = datetime.now)
-    expires                 = db.Column(db.BigInteger, default = -1)
-    token                   = db.Column(db.String(256), nullable = False, unique = True)
-    reason_id               = db.Column(db.String(128), nullable = False)
+    created: Mapped[datetime] = mapped_column(DateTime, default = datetime.now)
+    expires: Mapped[int] = mapped_column(BigInteger, default = -1)
+    token: Mapped[str] = mapped_column(String(256), nullable = False, unique = True)
+    reason_id: Mapped[str] = mapped_column(String(128), nullable = False)
 
-    verified                = db.Column(db.Boolean, default = False)
-    verified_on             = db.Column(db.DateTime, default = None)
-    last_email_sent_on      = db.Column(db.DateTime, default = None)
+    verified: Mapped[bool] = mapped_column(Boolean, default = False)
+    verified_on: Mapped[datetime] = mapped_column(DateTime, default = None)
+    last_email_sent_on: Mapped[datetime] = mapped_column(DateTime, default = None)
 
-    user                    = db.relationship(
-        "User",
+    user: Mapped["User"] = relationship(
         back_populates = "verifies_",
         uselist = False)
 
@@ -593,14 +742,14 @@ class UserLocationRace(db.Model):
     """An association object to be used as a secondary between the UserLocation and TrackUserRace models."""
     __tablename__ = "user_location_race"
 
-    user_location_id        = db.Column(db.Integer, db.ForeignKey("user_location.id"), primary_key = True, nullable = False)
+    user_location_id: Mapped[int] = mapped_column(ForeignKey("user_location.id"), primary_key = True, nullable = False)
     # Composite foreign key to TrackUserRace.
-    race_track_id           = db.Column(db.Integer, nullable = False, primary_key = True)
-    race_user_id            = db.Column(db.Integer, nullable = False, primary_key = True)
-    race_uid                = db.Column(db.String(65), nullable = False, primary_key = True)
+    race_track_id: Mapped[int] = mapped_column(nullable = False, primary_key = True)
+    race_user_id: Mapped[int] = mapped_column(nullable = False, primary_key = True)
+    race_uid: Mapped[str] = mapped_column(String(65), nullable = False, primary_key = True)
 
     __table_args__ = (
-        db.ForeignKeyConstraint(
+        ForeignKeyConstraint(
             ["race_track_id", "race_user_id", "race_uid"],
             ["track_user_race.track_id", "track_user_race.user_id", "track_user_race.uid"]
         ),
@@ -611,29 +760,27 @@ class UserLocation(db.Model, PointGeometryMixin):
     """Represents a single position of location history for a specific User."""
     __tablename__ = "user_location"
 
-    id                      = db.Column(db.Integer, primary_key = True)
-    user_id                 = db.Column(db.Integer, db.ForeignKey("user_.id", ondelete = "CASCADE"), nullable = False)
+    id: Mapped[int] = mapped_column(primary_key = True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_.id", ondelete = "CASCADE"), nullable = False)
 
     # The original latitude & longitude for the User, in an indeterminate EPSG.
-    longitude               = db.Column(db.Numeric(14, 11), nullable = False)
-    latitude                = db.Column(db.Numeric(13, 11), nullable = False)
+    longitude: Mapped[float] = mapped_column(Numeric(14, 11), nullable = False)
+    latitude: Mapped[float] = mapped_column(Numeric(13, 11), nullable = False)
     # The time (in milliseconds) at which this location snapshot was taken. Can't be None.
-    logged_at               = db.Column(db.BigInteger, nullable = False)
+    logged_at: Mapped[int] = mapped_column(BigInteger, nullable = False)
     # The User's rotation at this time. Can't be None.
-    rotation                = db.Column(db.Numeric(8,5), nullable = False)
+    rotation: Mapped[float] = mapped_column(Numeric(8,5), nullable = False)
     # The User's speed at this time. Can't be None.
-    speed                   = db.Column(db.Numeric(8, 5), nullable = False)
+    speed: Mapped[float] = mapped_column(Numeric(8, 5), nullable = False)
 
     # A UserLocation can also potentially belong to a single TrackUserRace instance, meaning that this user location was logged while
     # the User was racing a particular track. These user locations can only be deleted if the TrackUserRace itself is deleted.
-    track_user_race         = db.relationship(
-        "TrackUserRace",
+    track_user_race: Mapped["TrackUserRace"] = relationship(
         back_populates = "progress",
         uselist = False,
         secondary = "user_location_race")
     # The User that owns this location. Can't be None.
-    user                    = db.relationship(
-        "User",
+    user: Mapped["User"] = relationship(
         back_populates = "location_history_",
         uselist = False)
 
@@ -641,63 +788,80 @@ class UserLocation(db.Model, PointGeometryMixin):
         return f"UserLocation<{self.user}>"
 
 
-class User(UserMixin, db.Model):
+class User(UserMixin, db.Model, HasUUIDMixin):
     """Represents an individual's account with HawkSpeed."""
     __tablename__ = "user_"
 
     PRIVILEGE_USER = 0
     PRIVILEGE_ADMINISTRATOR = 5
 
-    id                      = db.Column(db.Integer, primary_key = True)
+    id: Mapped[int] = mapped_column(primary_key = True)
 
-    uid                     = db.Column(db.String(65), unique = True, default = lambda: uuid.uuid4().hex.lower())
-    email_address           = db.Column(db.String(128), nullable = False)
-    username                = db.Column(db.String(32), nullable = True, default = None)
-    bio                     = db.Column(db.Text, nullable = True, default = None)
-    password                = db.Column(db.String(254), nullable = False)
+    # The User's email address. This must be unique and can't be None.
+    email_address: Mapped[str] = mapped_column(String(128), nullable = False)
+    # The User's username. This must be unique and is configured to be nullable; since this is only set when the User sets their profile up.
+    username: Mapped[str] = mapped_column(String(32), unique = True, nullable = True, default = None)
+    # The User's bio. This can be None.
+    bio: Mapped[str] = mapped_column(Text(), nullable = True, default = None)
+    # The User's password, or hash thereof. Can't be None as this is set on initial registration.
+    password: Mapped[str] = mapped_column(String(254), nullable = False)
 
-    is_bot                  = db.Column(db.Boolean, default = False)
-    enabled                 = db.Column(db.Boolean, default = True)
-    verified                = db.Column(db.Boolean, default = False)
-    profile_setup           = db.Column(db.Boolean, default = False)
-    created                 = db.Column(db.BigInteger, default = time.time)
-    privilege               = db.Column(db.Integer, default = PRIVILEGE_USER)
-    # The request session ID/socket ID associated with SocketIO. When this is not None, the User is connected to the world.
-    socket_id               = db.Column(db.String(32), nullable = True, default = None)
+    # A boolean indicating whether this User is a bot. Default is False, can't be None.
+    is_bot: Mapped[bool] = mapped_column(nullable = False, default = False)
+    # A boolean indicating whether this User is enabled. Default is True, can't be None.
+    enabled: Mapped[bool] = mapped_column(nullable = False, default = True)
+    # A boolean indicating whether this User is verified. Default is False, can't be None.
+    verified: Mapped[bool] = mapped_column(nullable = False, default = False)
+    # A boolean indicating whether this User has set their profile up. Default is False, can't be None.
+    profile_setup: Mapped[bool] = mapped_column(nullable = False, default = False)
+    # A timestamp in seconds, when this User was created. Can't be None.
+    created: Mapped[int] = mapped_column(BigInteger(), nullable = False, default = time.time)
+    # The User's privilege, can't be None.
+    privilege: Mapped[int] = mapped_column(nullable = False, default = PRIVILEGE_USER)
+    # The request session ID/socket ID associated with SocketIO. When this is not None, the User is connected to the world. Can be None, indicating the User is not playing.
+    socket_id: Mapped[str] = mapped_column(String(32), nullable = True, default = None)
+    # The last time a location update was received from this User, as a timestamp in seconds. This will not be nulled in between sessions. Can be None.
+    last_location_update: Mapped[int] = mapped_column(BigInteger(), nullable = True, default = None)
 
+    # All Track comments posted by this User, as a dynamic relationship. Unordered.
+    track_comments_: Mapped[List[TrackComment]] = relationship(
+        back_populates = "user",
+        uselist = True,
+        lazy = "dynamic",
+        cascade = "all, delete")
+    # All Track ratings given by this User, as a dynamic relationship. Unordered.
+    track_ratings_: Mapped[List[TrackRating]] = relationship(
+        back_populates = "user",
+        uselist = True,
+        lazy = "dynamic",
+        cascade = "all, delete")
     # The User's ongoing race, if any. This is a view only relationship.
-    ongoing_race_           = db.relationship(
-        "TrackUserRace",
+    ongoing_race_: Mapped[TrackUserRace] = relationship(
         primaryjoin = and_(TrackUserRace.user_id == id, TrackUserRace.is_ongoing == True),
         uselist = False,
         viewonly = True)
-    # This User's location history, as a dynamic relationship. Order this so newest updates appear first.
-    location_history_       = db.relationship(
-        "UserLocation",
+    # This User's location history, as a dynamic relationship. Unordered.
+    location_history_: Mapped[List[UserLocation]] = relationship(
         back_populates = "user",
         lazy = "dynamic",
         uselist = True,
         cascade = "all, delete")
-    # This User's tracks, as a dynamic relationship.
-    tracks_                 = db.relationship(
-        "Track",
+    # This User's tracks, as a dynamic relationship. Unordered.
+    tracks_: Mapped[List[Track]] = relationship(
         back_populates = "user",
         uselist = True,
         lazy = "dynamic",
         cascade = "all, delete")
-    # The races performed by this User, as a dynamic relationship.
-    races_                  = db.relationship(
-        "TrackUserRace",
+    # All races performed by this User, as a dynamic relationship. This will include any ongoing races. Unordered.
+    races_: Mapped[List[TrackUserRace]] = relationship(
         back_populates = "user",
         uselist = True,
         lazy = "dynamic",
         cascade = "all, delete")
-    # Dynamic relationship for all verifies.
-    verifies_               = db.relationship(
-        "UserVerify",
+    # Dynamic relationship for all verifies. Unordered.
+    verifies_: Mapped[List[UserVerify]] = relationship(
         back_populates = "user",
         uselist = True,
-        order_by = "desc(UserVerify.created)",
         lazy = "dynamic",
         cascade = "all, delete")
 
@@ -706,7 +870,7 @@ class User(UserMixin, db.Model):
 
     @hybrid_property
     def is_setup(self):
-        """Determine if this User is setup."""
+        """Determine if this User is setup. Returns True if profile is setup, and no verification is required."""
         return self.profile_setup == True and self.requires_verification == False
 
     @is_setup.expression
@@ -721,7 +885,7 @@ class User(UserMixin, db.Model):
 
     @property
     def location_history(self):
-        """Return the User's location history as a query."""
+        """Return a query for the User's location history."""
         return self.location_history_
 
     @property
@@ -729,6 +893,11 @@ class User(UserMixin, db.Model):
         """Returns True if the User's profile is setup."""
         return self.profile_setup
 
+    @property
+    def requires_verification(self):
+        """Returns True if this User requires a verification of any type currently."""
+        return not self.is_account_verified or not self.is_password_verified
+    
     @property
     def is_account_verified(self):
         """Returns True if there are no open UserVerifies on this User and verified attribute is False."""
@@ -741,11 +910,6 @@ class User(UserMixin, db.Model):
         return True
 
     @property
-    def requires_verification(self):
-        """Returns True if this User requires a verification of any type currently."""
-        return not self.is_account_verified or not self.is_password_verified
-
-    @property
     def has_ongoing_race(self):
         """Return True if the User currently has an ongoing race, otherwise False."""
         return self.ongoing_race != None
@@ -753,9 +917,13 @@ class User(UserMixin, db.Model):
     @property
     def ongoing_race(self):
         """Return the currently ongoing race instance for this User, or None."""
-        return self.races_\
-            .filter(TrackUserRace.is_ongoing == True)\
-            .first()
+        return self.ongoing_race_
+    
+    @property
+    def is_playing(self):
+        """Returns True if the User is currently in the world. This will return True when the User currently has a socket ID set, and a location update
+        has been received from them in the last minute."""
+        return self.socket_id != None and (self.last_location_update != None and time.time()-self.last_location_update < 60)
 
     def add_location(self, location):
         """Adds this location to the User's history."""
@@ -764,11 +932,19 @@ class User(UserMixin, db.Model):
     def set_socket_session(self, sid):
         """Set this User's socket session to the latest one."""
         self.socket_id = sid
+    
+    def set_last_location_update(self, last_timestamp_s = time.time()):
+        """Set the timestamp, in seconds, when the last location update was received."""
+        self.last_location_update = last_timestamp_s
 
     def clear_socket_session(self):
         """Clear the User's socket session."""
         self.socket_id = None
 
+    def set_email_address(self, email_address):
+        """Set this User's email address."""
+        self.email_address = email_address
+        
     def set_username(self, username):
         """Set this User's username to the given text."""
         self.username = username
@@ -790,18 +966,22 @@ class User(UserMixin, db.Model):
         return check_password_hash(self.password, password)
 
     def set_privilege(self, privilege):
+        """Set this User's privilege."""
         LOG.debug(f"Setting privilege for {self} to {privilege}")
         self.privilege = privilege
 
     def set_enabled(self, enabled):
+        """Set this User enabled."""
         LOG.debug(f"Setting {self} enabled to {enabled}")
         self.enabled = enabled
 
     def set_verified(self, verified):
+        """Set this User verified."""
         LOG.debug(f"Setting {self} verified to {verified}")
         self.verified = verified
 
     def set_profile_setup(self, setup):
+        """Set this User's profile setup."""
         LOG.debug(f"Setting profile setup for {self} to {setup}")
         self.profile_setup = setup
 
@@ -853,12 +1033,11 @@ class ServerConfiguration(db.Model):
     """"""
     __tablename__ = "server_configuration"
 
-    id                      = db.Column(db.Integer, primary_key = True)
-    user_id                 = db.Column(db.Integer, db.ForeignKey("user_.id"), nullable = False)
+    id: Mapped[int] = mapped_column(primary_key = True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_.id"), nullable = False)
 
     # The HawkSpeed user.
-    user                    = db.relationship(
-        "User",
+    user: Mapped[User] = relationship(
         uselist = False)
 
     def __repr__(self):

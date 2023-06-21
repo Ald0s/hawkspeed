@@ -118,8 +118,11 @@ class BaseCase(TestCase):
         db.session.add(race)
         db.session.flush()
 
+        request_player_update_schema = world.RequestPlayerUpdateSchema()
         for user_location_d in race_simulator.step(**kwargs):
-            player_update_result = world.parse_player_update(user, user_location_d)
+            # With the user location, we'll load a request player update.
+            request_player_update = request_player_update_schema.load(user_location_d)
+            player_update_result = world.parse_player_update(user, request_player_update)
             db.session.flush()
             if user.has_ongoing_race:
                 update_race_participation_result = races.update_race_participation_for(user, player_update_result)
