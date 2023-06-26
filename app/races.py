@@ -14,7 +14,7 @@ from datetime import datetime, date
 from sqlalchemy import func
 from marshmallow import fields, Schema, post_load, EXCLUDE
 
-from . import db, config, models, decorators, world, error
+from . import db, config, models, tracks, world, error
 
 LOG = logging.getLogger("hawkspeed.races")
 LOG.setLevel( logging.DEBUG )
@@ -22,9 +22,18 @@ LOG.setLevel( logging.DEBUG )
 
 class RaceStartError(Exception):
     """An exception that will communicate the reason for a failed race start."""
+    # Player is already in an existing race.
+    REASON_ALREADY_IN_RACE = "already-in-race"
+    # Either countdown or started position is not supported.
     REASON_POSITION_NOT_SUPPORTED = "position-not-supported"
+    # No countdown position was provided. This is a location snapshot taken when the race countdown was started.
     REASON_NO_COUNTDOWN_POSITION = "no-countdown-position"
+    # No started position was provided. This is a location snapshot taken when the race actually began; at GO.
     REASON_NO_STARTED_POSITION = "no-started-position"
+    # No track was found with the given UID.
+    REASON_NO_TRACK_FOUND = "no-track-found"
+    # The track the User wishes to race can't be raced at the moment.
+    REASON_TRACK_NOT_READY = "cant-be-raced"
     
     def __init__(self, reason_code):
         self.reason_code = reason_code
@@ -69,7 +78,7 @@ class RequestStartRaceSchema(Schema):
         return RequestStartRace(**data)
     
 
-class RaceUpdateSchema(Schema):
+class TrackUserRaceSchema(Schema):
     """A Schema that outlines the structure of a report on a TrackUserRace, for the Player currently performing that race. So this is not a view model compatible
     object, and does not contain any data points that considers any perspective."""
     class Meta:
@@ -84,12 +93,34 @@ class RaceUpdateSchema(Schema):
     cancelled               = fields.Bool()
 
 
+def get_ongoing_race(user, **kwargs) -> models.TrackUserRace:
+    """Get the ongoing race for the given User and return it. If there is no ongoing race at the time, None will be returned.
+    
+    Arguments
+    ---------
+    :user: The User for whom to get the ongoing race for.
+    
+    Returns
+    -------
+    An instance of TrackUserRace, can be None."""
+    try:
+        # If current environment is testing, expire the given User.
+        if config.APP_ENV == "Test":
+            db.session.expire(user)
+        # Return None if no race ongoing, otherwise the race.
+        if not user.has_ongoing_race:
+            return None
+        return user.ongoing_race
+    except Exception as e:
+        raise e
+    
+
 class StartRaceResult():
     """A container for storing the result of starting a new race."""
     class StartRaceResponseSchema(Schema):
         """A confirmation response that the race started correctly or that the race did not start for some reason or disqualification."""
         is_started              = fields.Bool(allow_none = False)
-        race                    = fields.Nested(RaceUpdateSchema, many = False, allow_none = True)
+        race                    = fields.Nested(TrackUserRaceSchema, many = False, allow_none = True)
         error_code              = fields.Str(allow_none = True)
 
     @property
@@ -131,22 +162,17 @@ def start_race_for(user, request_start_race, player_update_result, **kwargs) -> 
     -------
     Returns an instance of StartRaceResult."""
     try:
-        # Locate the desired track, only verified tracks can be used.
-        track = db.session.query(models.Track)\
-            .filter(models.Track.uid == request_start_race.track_uid)\
-            .filter(models.Track.verified == True)\
-            .first()
-        # If no track, raise an exception.
-        if not track:
-            """TODO: handle this correctly."""
-            raise NotImplementedError("start_race_for failed because no track could be found, and this case is NOT yet handled.")
+        # Locate the desired track, only verified tracks can be used. This can raise NoTrackFound and TrackCantBeRaced.
+        track = tracks.find_existing_track(
+            request_start_race.track_uid)
         # Now, validate the User's position & countdown measurements to search for disqualification cases. This will either silently succeed, or will raise an error.
         _validate_new_race_intent(user, request_start_race, player_update_result)
         # Get the user location for the point logged at race start.
         user_location = player_update_result.user_location
         # Valid pre-race conditions. We can now build a track user race instance from the different components. Set the time started to the user location's logged at.
         # Obviously, set the Track and User to the subjects of the function call, set the CRS for this TrackUserRace to the configured CRS.
-        track_user_race = models.TrackUserRace(started = user_location.logged_at)
+        track_user_race = models.TrackUserRace(
+            started = user_location.logged_at)
         track_user_race.set_track_and_user(track, user)
         track_user_race.set_crs(config.WORLD_CONFIGURATION_CRS)
         # Add the user location in player update result to the track and return a start race result.
@@ -157,6 +183,12 @@ def start_race_for(user, request_start_race, player_update_result, **kwargs) -> 
         # The result declares we have succesfully started the race.
         return StartRaceResult(True,
             track_user_race = track_user_race)
+    except tracks.NoTrackFound as ntf:
+        # Raise a race start error for reason REASON_NO_TRACK_FOUND.
+        raise RaceStartError(RaceStartError.REASON_NO_TRACK_FOUND)
+    except tracks.TrackCantBeRaced as tcbr:
+        # Raise a race start error for reason REASON_TRACK_NOT_READY.
+        raise RaceStartError(RaceStartError.REASON_TRACK_NOT_READY)
     except RaceDisqualifiedError as rde:
         """TODO: handle any failure to start the race. Return a False result, with appropriate error messaging."""
         raise NotImplementedError()
@@ -166,19 +198,58 @@ def start_race_for(user, request_start_race, player_update_result, **kwargs) -> 
 
 
 class UpdateRaceParticipationResult():
-    """A container for the result of updating the status of an ongoing race, this result will also contain an indication if this race has been successfully complete.
-    However, an indication of disqualification or other interruptions will not be communicated with this result, exceptions will be used instead."""
+    """A container for the result of updating a Player's ongoing race. The required argument should be a track user race, updated to reflect the most up to date state of the
+    ongoing race, as reports for the result will be determined on that basis."""
+    class RaceFinishedSchema(Schema):
+        """A one-way message from the server to the client, informing them that the current race is complete."""
+        class Meta:
+            unknown = EXCLUDE
+        race                    = fields.Nested(TrackUserRaceSchema, many = False, allow_none = True)
+
+    class RaceProgressSchema(Schema):
+        """A one-way message from the server to the client, informing them that the current race is ongoing."""
+        class Meta:
+            unknown = EXCLUDE
+        race                    = fields.Nested(TrackUserRaceSchema, many = False, allow_none = True)
+
+    class RaceDisqualifiedSchema(Schema):
+        """A one-way message from the server to the client, informing them that their current race has been disqualified."""
+        class Meta:
+            unknown = EXCLUDE
+        race                    = fields.Nested(TrackUserRaceSchema, many = False, allow_none = True)
+        
     @property
     def is_finished(self):
-        return self._is_finished
+        """Returns True if the race is now finished."""
+        return self._track_user_race.is_finished
+    
+    @property
+    def is_disqualified(self):
+        """Returns True if the race has been disqualified."""
+        return self._track_user_race.is_disqualified
 
     @property
-    def track_user_race(self):
+    def race(self):
         return self._track_user_race
 
+    def __init__(self, _track_user_race, **kwargs):
+        self._track_user_race = _track_user_race
+    '''
     def __init__(self, _is_finished, _track_user_race, **kwargs):
         self._is_finished = _is_finished
-        self._track_user_race = _track_user_race
+        self._track_user_race = _track_user_race'''
+    
+    def serialise(self, **kwargs):
+        """Serialise the update race participation result to its response. The response will either be RaceFinishedSchema, RaceProgressSchema or RaceDisqualfiedSchema
+        depending on the overall outcome."""
+        if self.is_finished:
+            schema = self.RaceFinishedSchema(**kwargs)
+        elif self.is_disqualified:
+            schema = self.RaceDisqualifiedSchema(**kwargs)
+        else:
+            schema = self.RaceProgressSchema(**kwargs)
+        # Serialise the current result object through this schema and return.
+        return schema.dump(self)
 
 
 def update_race_participation_for(user, player_update_result, **kwargs) -> UpdateRaceParticipationResult:
@@ -212,18 +283,77 @@ def update_race_participation_for(user, player_update_result, **kwargs) -> Updat
         if verify_progress_result.is_finished:
             # The race has been finished successfully. We will now set the ongoing race's finished parameter to the time logged in latest Player update.
             ongoing_race.set_finished(verify_progress_result.time_finished)
-            return UpdateRaceParticipationResult(True, ongoing_race)
+            return UpdateRaceParticipationResult(ongoing_race)#return UpdateRaceParticipationResult(True, ongoing_race)
         # Otherwise, race is not finished just yet, return a negative result.
-        return UpdateRaceParticipationResult(False, ongoing_race)
+        return UpdateRaceParticipationResult(ongoing_race)#return UpdateRaceParticipationResult(False, ongoing_race)
     except RaceDisqualifiedError as rde:
         # The race must be disqualified. Call the disqualification procedure.
-        disqualify_ongoing_race(rde.user, rde.dq_code,
+        ongoing_race = disqualify_ongoing_race(rde.user, rde.dq_code,
             dq_extra_info = rde.dq_extra_info)
-        # Finally, re-raise this exception once disqualification is complete, so the appropriate response will be sent to Player.
-        raise rde
+        # Return an update race participation result.
+        return UpdateRaceParticipationResult(ongoing_race)
     except Exception as e:
         raise e
 
+
+class CancelRaceResult():
+    """A container for the result of cancelling a race."""
+    REASON_NO_ONGOING_RACE = "no-ongoing-race"
+
+    class CancelRaceResponseSchema(Schema):
+        """A one-way message from the server to the client, informing them that their current race has been cancelled."""
+        class Meta:
+            unknown = EXCLUDE
+        race                    = fields.Nested(TrackUserRaceSchema, many = False, allow_none = True)
+        reason_code             = fields.Str(allow_none = True)
+
+    @property
+    def race(self):
+        return self._track_user_race
+    
+    @property
+    def reason_code(self):
+        """Return the reason code, if any. If race is None, this means there was no race to cancel."""
+        if not self._track_user_race:
+            return CancelRaceResult.REASON_NO_ONGOING_RACE
+        return self._reason_code
+    
+    def __init__(self, _track_user_race = None, _reason_code = None, **kwargs):
+        self._track_user_race = _track_user_race
+        self._reason_code = _reason_code
+    
+    def serialise(self, **kwargs):
+        """Serialise this result."""
+        schema = self.CancelRaceResponseSchema(**kwargs)
+        return schema.dump(self)
+
+
+def cancel_ongoing_race(user, **kwargs) -> CancelRaceResult:
+    """Cancel any ongoing race that may be attached to the User. This function will simply check for the ongoing race, then set it to a cancelled state. This function will
+    always return a CancelRaceResult, which can be serialised to a cancelled response object.
+
+    Arguments
+    ---------
+    :user: The User to cancel the ongoing race for.
+    
+    Returns
+    -------
+    An instance of cancel race result, which contains the cancellation outcome."""
+    try:
+        # Attempt to get the ongoing race.
+        ongoing_race = get_ongoing_race(user)
+        if ongoing_race:
+            ongoing_race.cancel()
+            # Flush transaction.
+            db.session.flush()
+            if config.APP_ENV == "Test":
+                # If the environment is test, expire the User to reload from database.
+                db.session.expire(user)
+        return CancelRaceResult(ongoing_race)
+    except Exception as e:
+        """TODO: we can catch exceptions here, then pass the relevant reason codes to second argument for cancel race result ctor; CancelRaceResult(race, <reason code>)"""
+        raise e
+    
 
 def disqualify_ongoing_race(user, dq_code, **kwargs) -> models.TrackUserRace:
     """Disqualify the ongoing race for this User. This will in turn execute the cancellation logic, but also offers additional opportunity for logging or the storage and
@@ -244,23 +374,11 @@ def disqualify_ongoing_race(user, dq_code, **kwargs) -> models.TrackUserRace:
         if ongoing_race:
             ongoing_race.disqualify(dq_code,
                 dq_extra_info = dq_extra_info)
-        return ongoing_race
-    except Exception as e:
-        raise e
-
-
-def cancel_ongoing_race(user, **kwargs) -> models.TrackUserRace:
-    """Cancel any ongoing race that may be attached to the User. This function will simply check for the ongoing race, then set it to a cancelled state. The TrackUserRace
-    instance will then be returned. If there is no ongoing race, this function will return None.
-
-    Arguments
-    ---------
-    :user: The User to cancel the ongoing race for."""
-    try:
-        # If there is an ongoing race, cancel it.
-        ongoing_race = user.ongoing_race
-        if ongoing_race:
-            ongoing_race.cancel()
+            # Flush this.
+            db.session.flush()
+            # If environment is test, expire the race.
+            if config.APP_ENV == "Test":
+                db.session.expire(ongoing_race)
         return ongoing_race
     except Exception as e:
         raise e
@@ -303,8 +421,9 @@ class VerifyRaceProgressResult():
         """Return a timestamp, in seconds, at which the race was finished."""
         return self._time_finished
 
-    def __init__(self, _is_finished, **kwargs):
+    def __init__(self, _is_finished, _percent_complete, **kwargs):
         self._is_finished = _is_finished
+        self._percent_complete = _percent_complete
         self._time_finished = kwargs.get("time_finished", None)
 
 
@@ -321,26 +440,20 @@ def _verify_race_progress(user, track_user_race, player_update_result, **kwargs)
     try:
         # If the race does not yet have progress, silently return.
         if not track_user_race.has_progress:
-            return VerifyRaceProgressResult(False)
+            return VerifyRaceProgressResult(False, 0)
         user_location = player_update_result.user_location
-        track_path = track_user_race.track.path
-        """TODO: we currently don't support multi lines directly, so simply grab a linestring from the geoms."""
-        track_path_linestring = track_path.multi_linestring.geoms[0]
-        # Get the Player's progress thus far, as a line string, and buffer it such that it is a Polygon slightly larger on all sides than the track geometry.
-        progress_polygon = track_user_race.linestring\
-            .buffer(config.NUM_METERS_BUFFER_PLAYER_PROGRESS, cap_style = shapely.geometry.CAP_STYLE.square)
-        # Ensure the Player has not driven too far from the track.
-        _ensure_player_still_racing(track_path_linestring, user_location)
-        # Determine, on the basis of the progress polygon & track path, whether the race is now finished.
-        """TODO: make this more complex. I don't think the finish point being within the progress is the best indication of course completion."""
-        has_finished_race = track_path.finish_point.within(progress_polygon)
-        # Ensure the Player hasn't dodged the track at all. This will include all unauthorised shortcuts.
-        _ensure_player_hasnt_dodged_track(track_path_linestring, progress_polygon, has_finished_race)
+        # Calculate and validate progress thus far.
+        race_progress_result = _calculate_validate_progress(track_user_race, user_location)
+        # Check for disqualification criteria. Ensure percentage of track missed is not over what is acceptable.
+        if race_progress_result.percent_track_missed > config.MAX_PERCENT_PATH_MISSED_DISQUALIFY:
+            raise PlayerDodgedTrackError(int(race_progress_result.percent_track_missed))
         # Finally, we'll determine if the Player has finished the course. Currently, we'll do this by just ensuring the finish point is within the progress polygon.
-        if has_finished_race:
+        if race_progress_result.is_race_finished:
             # Return a race progress result where we declare the race is finished.
-            return VerifyRaceProgressResult(True, time_finished = user_location.logged_at)
-        return VerifyRaceProgressResult(False)
+            return VerifyRaceProgressResult(True, 0, time_finished = user_location.logged_at)
+        else:
+            LOG.debug(f"{track_user_race} is not finished ({race_progress_result.percent_complete}% complete)")
+        return VerifyRaceProgressResult(False, 0)
     except PlayerDodgedTrackError as pdte:
         LOG.warning(f"Disqualifying race {track_user_race}, the Player has dodged too much of the track. ({pdte.percentage_dodged}%)")
         raise RaceDisqualifiedError(user, track_user_race,
@@ -368,6 +481,116 @@ def _update_race_averages(user, track_user_race, player_update_result, **kwargs)
         raise e
 
 
+class RaceProgressResult():
+    """A container for the result of calculating the player's progress through the track."""
+    @property
+    def percent_remaining(self):
+        """The percent of track remaining; this is simply 100 minus complete."""
+        return 100-self.percentage_complete
+    
+    def __init__(self, _is_race_finished, _progress_linestring, _track_path_linestring, _missed_track_linestrings):
+        self.is_race_finished = _is_race_finished
+        self._track_path_linestring = _track_path_linestring
+        self._missed_track_linestrings = _missed_track_linestrings
+        # Now, the list of missed track linestrings are those we will check against the track overall for disqualification. Sum the lengths of them all.
+        self.meters_missed_track = sum([ls.length for ls in self._missed_track_linestrings])
+        # Calculate percent missed too.
+        self.percent_track_missed = int((self.meters_missed_track/_track_path_linestring.length) * 100)
+        # Calculate percent complete, which currently is progress linestring's length as a percentage of the track path's linestring.
+        """TODO: this is not precise, improve this; especially if Player missed sections."""
+        self.percent_complete = int((_progress_linestring.length/_track_path_linestring.length) * 100)
+        
+
+
+def _calculate_validate_progress(track_user_race, latest_user_location, **kwargs) -> RaceProgressResult:
+    """Calculate and validate progress made by the User thus far in the race attempt. The location provided should already be added to the race. This function will first find the
+    difference between the track's path and a linestring built from all user locations provided that have been associated with this race attempt. The result of this differentiation
+    will then allow the function to determine if the track has been dodged, missed or ignored. The function will also determine whether the race's attempt has qualified for completion.
+
+    Arguments
+    ---------
+    :track_user_race: An instance of UserTrackRace, containing the current state of the User's race attempt.
+    :latest_user_location: An instance of UserLocation, the most recent loaded player location being used to update the race.
+    
+    Returns
+    -------
+    An instance of RaceProgressResult containing the results of calculations performed."""
+    try:
+        track = track_user_race.track
+        track_path = track.path
+        # Start by calculating that differentiation. Do this by buffering the Player's progress, then calculating the symmetric difference with the track's path.
+        """TODO: we currently don't support multi lines directly, so simply grab a linestring from the geoms.
+        TODO: when creating progress polygon, we should actually refrain from buffering in the direction the track is going, as this could result in a false finish."""
+        track_path_linestring = track_path.multi_linestring.geoms[0]
+        progress_linestring = track_user_race.linestring
+        progress_polygon = progress_linestring\
+            .buffer(config.NUM_METERS_BUFFER_PLAYER_PROGRESS, cap_style = shapely.geometry.CAP_STYLE.square)
+        # Ensure the Player has not driven too far from the track. This will raise an exception.
+        _ensure_player_still_racing(track_path_linestring, latest_user_location)
+        # Determine, on the basis of the progress polygon & track path, whether the race is now finished.
+        is_race_finished = _is_race_finished(track_path, track_path_linestring, progress_polygon)
+        # Calculate a symmetric difference between the player's progress and the track path.
+        race_symmetric_difference = progress_polygon.symmetric_difference(track_path_linestring)
+        """TODO: we want to ensure that for now only polygons and linestrings can appear in the result, if it is a geometrycollection. We want to track potential requirements for other
+        types to support as time goes on, and as we feed more data."""
+        if isinstance(race_symmetric_difference, shapely.geometry.GeometryCollection):
+            for symdif_geom in race_symmetric_difference.geoms:
+                if not isinstance(symdif_geom, shapely.geometry.Polygon) and not isinstance(symdif_geom, shapely.geometry.LineString):
+                    raise NotImplementedError(f"_calculate_validate_progress failed. We currently only support Polygon and LineStrings in symmetric diff result. But we have found {type(symdif_geom)} is used.")
+        # Find all missed track sections.
+        missed_track_linestrings = _determine_missed_sections(is_race_finished, race_symmetric_difference)
+        # Return our race progress result.
+        return RaceProgressResult(is_race_finished, progress_linestring, track_path_linestring, missed_track_linestrings)
+    except Exception as e:
+        raise e
+
+
+def _is_race_finished(track_path, track_path_linestring, progress_polygon, **kwargs) -> bool:
+    """"""
+    try:
+        """TODO: make this more complex. I don't think the finish point being within the progress is the best indication of course completion."""
+        return track_path.finish_point.within(progress_polygon)
+    except Exception as e:
+        raise e
+    
+
+def _determine_missed_sections(is_race_finished, race_symmetric_difference, **kwargs):
+    """"""
+    try:
+        if is_race_finished:
+            # We have finished the race. If race_symmetric_difference is a Polygon, this means there is NO track missed.
+            if isinstance(race_symmetric_difference, shapely.geometry.Polygon):
+                missed_track_linestrings = []
+            elif isinstance(race_symmetric_difference, shapely.geometry.GeometryCollection):
+                # This is a GeometryCollection, meaning there were probably fragments missed.
+                missed_track_linestrings = list(race_symmetric_difference.geoms)[1:]
+        else:
+            # Otherwise, race is not yet finished. If race_symmetric_difference is NOT a GeometryCollection, raise an exception.
+            if not isinstance(race_symmetric_difference, shapely.geometry.GeometryCollection):
+                """TODO: handle this edge case."""
+                raise NotImplementedError("When the race is not yet finished, race_symmetric_difference should ALWAYS be a GeometryCollection?")
+            # Check the number of geometries in this collection. If there are two (the Polygon and a LineString,) this means the Player has not skipped any sections.
+            race_symmetric_difference_geoms = list(race_symmetric_difference.geoms)
+            if len(race_symmetric_difference_geoms) == 2:
+                # As long as the first is a Polygon and the second a LineString, there are no sections missed.
+                if not isinstance(race_symmetric_difference_geoms[0], shapely.geometry.Polygon) or not isinstance(race_symmetric_difference_geoms[1], shapely.geometry.LineString):
+                    """TODO: only 2 geoms found in race symmetric difference."""
+                    raise NotImplementedError("Two geometries found in race_symmetric_difference_geoms, when race is not yet finished, and they are not Polygon & LineString respectively.")
+                else:
+                    # Otherwise, no sections missed.
+                    missed_track_linestrings = []
+            elif len(race_symmetric_difference_geoms) > 2:
+                # There are more than two geometries. Get all linestrings after the first geometry (the Polygon) and before the last (LineString, that is the remainder of the track.) These
+                # are missed track sections.
+                missed_track_linestrings = race_symmetric_difference_geoms[1:len(race_symmetric_difference_geoms)-1]
+            else:
+                # Only one geom? This is not supported.
+                raise NotImplementedError("_determine_missed_sections failed. There is a single geom in race symmetric difference.")
+        return missed_track_linestrings
+    except Exception as e:
+        raise e
+    
+
 def _ensure_player_still_racing(track_path_linestring, latest_user_location):
     """Ensure the Player has deviated from the track's path to an unacceptable extent, configured with the NUM_METERS_MAX_DEVIATION_DISQUALIFY option. If the function determines
     the Player should be disqualified on this basis, it will raise an error. Otherwise, it will silently succeed.
@@ -381,9 +604,9 @@ def _ensure_player_still_racing(track_path_linestring, latest_user_location):
         pass
     except Exception as e:
         raise e
+    
 
-
-def _ensure_player_hasnt_dodged_track(track_path_linestring, progress_polygon, has_finished_race):
+'''def _calculate_validate_progress(track_path_linestring, progress_polygon, has_finished_race) -> RaceProgressResult:
     """Determine the symmetric difference between the progress polygon and the track's path linestring. If the return is a Polygon geometry, the Player's progress totally
     contains the track, and therefore this is synonymous with the race being finished. Otherwise, if the result is a GeometryCollection, the first item in the collection
     must be the progress polygon, the rest should all be LineString instances.
@@ -397,16 +620,21 @@ def _ensure_player_hasnt_dodged_track(track_path_linestring, progress_polygon, h
     ---------
     :track_path_linestring: The Track's LineString.
     :progress_points: A Polygon, which is the Player's progress LineString that has been buffered.
-    :has_finished_race: A boolean indicating whether or not we've determined that the Player has finished the race."""
+    :has_finished_race: A boolean indicating whether or not we've determined that the Player has finished the race.
+    
+    Returns
+    -------
+    An instance of RaceProgressResult containing the results of calculations performed."""
     try:
+        # Calculate a symmetric difference between the player's progress and the track path.
         race_symmetric_difference = progress_polygon.symmetric_difference(track_path_linestring)
 
         """TODO: we want to ensure that for now only polygons and linestrings can appear in the result, if it is a geometrycollection. We want to track potential requirements for other
         types to support as time goes on, and as we feed more data."""
         if isinstance(race_symmetric_difference, shapely.geometry.GeometryCollection):
-            for x in race_symmetric_difference.geoms:
-                if not isinstance(x, shapely.geometry.Polygon) and not isinstance(x, shapely.geometry.LineString):
-                    raise NotImplementedError(f"_analyse_race failed. We currently only support Polygon and LineStrings in symmetric diff result. But we have found {type(x)} is used.")
+            for symdif_geom in race_symmetric_difference.geoms:
+                if not isinstance(symdif_geom, shapely.geometry.Polygon) and not isinstance(symdif_geom, shapely.geometry.LineString):
+                    raise NotImplementedError(f"_calculate_validate_progress failed. We currently only support Polygon and LineStrings in symmetric diff result. But we have found {type(symdif_geom)} is used.")
 
         if has_finished_race:
             # We have finished the race. If race_symmetric_difference is a Polygon, this means there is NO track missed.
@@ -444,4 +672,4 @@ def _ensure_player_hasnt_dodged_track(track_path_linestring, progress_polygon, h
         if percentage_track_missed > config.MAX_PERCENT_PATH_MISSED_DISQUALIFY:
             raise PlayerDodgedTrackError(int(percentage_track_missed))
     except Exception as e:
-        raise e
+        raise e'''

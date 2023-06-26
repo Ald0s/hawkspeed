@@ -338,7 +338,7 @@ class TrackUserRace(db.Model, LineStringGeometryMixin):
         uselist = False)
 
     def __repr__(self):
-        return f"TrackUserRace<{self.track},{self.user},o={self.is_ongoing}>"
+        return f"TrackUserRace<{self.track},{self.user},o={self.is_ongoing},dq={self.is_disqualified}>"
 
     @hybrid_property
     def is_ongoing(self):
@@ -492,6 +492,9 @@ class TrackComment(db.Model):
     user_id: Mapped[int] = mapped_column(ForeignKey("user_.id", ondelete = "CASCADE"), primary_key = True)
     uid: Mapped[str] = mapped_column(GUID(), primary_key = True, default = lambda: uuid.uuid4().hex.lower())
     
+    # An association proxy through to the Track's UID.
+    track_uid: AssociationProxy["Track"] = association_proxy("track", "uid")
+
     # A timestamp, in seconds, when this comment was created. Can't be None.
     created: Mapped[int] = mapped_column(BigInteger(), nullable = False, default = time.time)
     # The comment's text. Can't be None.
@@ -569,7 +572,8 @@ class Track(db.Model, PointGeometryMixin):
     user: Mapped["User"] = relationship(
         back_populates = "tracks_",
         uselist = False)
-    # This track's path instance. This is a dynamic relationship so the entire path is not loaded on each query. Can't be None.
+    # This track's path instance. Can't be None.
+    """TODO: should make this dynamic?"""
     path_: Mapped["TrackPath"] = relationship(
         back_populates = "track",
         uselist = False,
@@ -666,8 +670,8 @@ class UserVerify(db.Model):
     reason_id: Mapped[str] = mapped_column(String(128), nullable = False)
 
     verified: Mapped[bool] = mapped_column(Boolean, default = False)
-    verified_on: Mapped[datetime] = mapped_column(DateTime, default = None)
-    last_email_sent_on: Mapped[datetime] = mapped_column(DateTime, default = None)
+    verified_on: Mapped[datetime] = mapped_column(DateTime, nullable = True, default = None)
+    last_email_sent_on: Mapped[datetime] = mapped_column(DateTime, nullable = True, default = None)
 
     user: Mapped["User"] = relationship(
         back_populates = "verifies_",
@@ -746,7 +750,7 @@ class UserLocationRace(db.Model):
     # Composite foreign key to TrackUserRace.
     race_track_id: Mapped[int] = mapped_column(nullable = False, primary_key = True)
     race_user_id: Mapped[int] = mapped_column(nullable = False, primary_key = True)
-    race_uid: Mapped[str] = mapped_column(String(65), nullable = False, primary_key = True)
+    race_uid: Mapped[str] = mapped_column(GUID(), nullable = False, primary_key = True)
 
     __table_args__ = (
         ForeignKeyConstraint(

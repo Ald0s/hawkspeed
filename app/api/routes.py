@@ -9,7 +9,7 @@ from flask import request
 from flask_login import current_user, logout_user, login_required
 from marshmallow import ValidationError
 
-from .. import db, config, models, decorators, error, account, viewmodel
+from .. import db, config, models, decorators, error, account, tracks, viewmodel
 from . import api
 
 LOG = logging.getLogger("hawkspeed.api.routes")
@@ -142,6 +142,20 @@ def setup_profile(**kwargs):
         raise e
 
 
+@api.route("/api/v1/user/<user_uid>", methods = [ "GET" ])
+@decorators.account_setup_required()
+@decorators.get_user()
+def get_user(user, **kwargs):
+    """Perform a GET request for the User identified by the given UID. This function will return a User view model on success."""
+    try:
+        # Build a new view model for the User.
+        user_view_model = viewmodel.UserViewModel(current_user, user)
+        # Now, return the serialised view model.
+        return user_view_model.serialise(), 200
+    except Exception as e:
+        raise e
+    
+    
 @api.route("/api/v1/track/<track_uid>", methods = [ "GET" ])
 @decorators.account_setup_required()
 @decorators.get_track(should_belong_to_user = False)
@@ -175,25 +189,6 @@ def get_track_with_path(track, **kwargs):
     except Exception as e:
         raise e
     
-
-@api.route("/api/v1/track/<track_uid>/leaderboard", methods = [ "GET" ])
-@decorators.account_setup_required()
-@decorators.get_track(should_belong_to_user = False)
-def page_track_leaderboard(track, **kwargs):
-    """Perform a GET request to page the leaderboard for the given track. Supply a query argument 'p' to identify the page we have requested. On success, the route will
-    return a page object containing the Track, ordered finished race outcomes, the current page number and the next page number (or None if there are no more.)"""
-    try:
-        # Get the page argument. By default, page one.
-        page = request.args.get("p", 1)
-        # With the track and the requested page, create a new track view model and get back a SerialisablePagination object from the view model.
-        track_view_model = viewmodel.TrackViewModel(current_user, track)
-        leaderboard_sp = track_view_model.page_leaderboard(page)
-        # Now, return this as a paged response, providing a base dict containing the serialised track view model, too.
-        return leaderboard_sp.as_paged_response(base_dict = dict(
-            track = track_view_model.serialise())), 200
-    except Exception as e:
-        raise e
-
 
 @api.route("/api/v1/track/new", methods = [ "PUT" ])
 @decorators.account_setup_required()
@@ -229,6 +224,133 @@ def manage_track(track, **kwargs):
     except Exception as e:
         raise e
 
+
+@api.route("/api/v1/track/<track_uid>/rate", methods = [ "POST", "DELETE" ])
+@decorators.account_setup_required()
+@decorators.get_track(should_belong_to_user = False)
+def rate_track(track, **kwargs):
+    """Perform a POST request to vote the desired track either up or down. JSON body must be compatible with the RequestRating schema. The rating field given there
+    will upvote the track if True, or downvote the track if False. Perform a DELETE request to clear the current User's rating, or, if none present, do nothing."""
+    try:
+        # Setup a new track view model for the desired track.
+        track_view_model = viewmodel.TrackViewModel(current_user, track)
+        if request.method == "POST":
+            # Load the request JSON as a RequestRating.
+            request_rating_schema = tracks.RequestRatingSchema()
+            request_rating = request_rating_schema.load(request.json)
+            # Now, use the view model to perform the rating.
+            track_view_model.rate(request_rating)
+        elif request.method == "DELETE":
+            # Delete has been requested. Simply use view model to request a clearing of any ratings.
+            track_view_model.clear_rating()
+        # Commit, then serialise and return the track.
+        db.session.commit()
+        return track_view_model.serialise(), 200
+    except Exception as e:
+        raise e
+    
+
+@api.route("/api/v1/track/<track_uid>/comment", methods = [ "POST" ])
+@decorators.account_setup_required()
+@decorators.get_track(should_belong_to_user = False)
+def comment_track(track, **kwargs):
+    """Perform a POST request with a JSON body compatible with RequestCommentSchema to post a comment toward the desired track. If successful, this function
+    will serve the serialised track view comment, along with the track it has been posted toward."""
+    try:
+        # Create a track view model.
+        track_view_model = viewmodel.TrackViewModel(current_user, track)
+        if request.method == "POST":
+            # We will post a new comment to this track. Load JSON as a request comment.
+            request_comment_schema = tracks.RequestCommentSchema()
+            request_comment = request_comment_schema.load(request.json)
+            # Now, use the viewmodel to create a new comment, getting back the comment view model.
+            track_comment_vm = track_view_model.comment(request_comment)
+            # Commit this to database, then return the new comment & track together.
+            db.session.commit()
+            return dict(
+                track = track_view_model.serialise(), track_comment = track_comment_vm.serialise()), 200
+        else:
+            raise NotImplementedError
+    except Exception as e:
+        raise e
+    
+
+@api.route("/api/v1/track/<track_uid>/comment/<comment_uid>", methods = [ "POST", "DELETE" ])
+@decorators.account_setup_required()
+@decorators.get_track(should_belong_to_user = False)
+def manage_track_comment(track, comment_uid, **kwargs):
+    """Perform a POST request with a JSON body compatible with RequestCommentSchema to edit an existing comment with the given UID. If successful, this function
+    will serve the serialised track view comment, along with the track it has been posted toward. Perform a DELETE request to delete the desired comment."""
+    try:
+        # Create a track view model.
+        track_view_model = viewmodel.TrackViewModel(current_user, track)
+        try:
+            # Now, request the desired comment from the view model, catch value error which means there is no comment.
+            track_comment_vm = track_view_model.find_comment(comment_uid)
+        except ValueError as ve:
+            # There is no comment.
+            """TODO: handle properly"""
+            raise NotImplementedError(f"Failed to DELETE comment from a track, there is no comment with UID {comment_uid} and this is not handled.")
+        if request.method == "POST":
+            # We will edit an existing comment on this track. Load JSON as a request comment.
+            request_comment_schema = tracks.RequestCommentSchema()
+            request_comment = request_comment_schema.load(request.json)
+            # Now, call the edit function on track comment view model with this request.
+            track_comment_vm.edit(request_comment)
+            # Commit this to database, then return the comment & track together.
+            db.session.commit()
+            return dict(
+                track = track_view_model.serialise(), track_comment = track_comment_vm.serialise()), 200
+        elif request.method == "DELETE":
+            # We have been asked to delete the comment. Serialise the comment now as our result.
+            track_comment_vm_d = track_comment_vm.serialise()
+            # Perform the deletion, then commit and return our serialised comment.
+            track_comment_vm.delete()
+            db.session.commit()
+            return track_comment_vm_d, 200
+        else:
+            raise NotImplementedError
+    except Exception as e:
+        raise e
+    
+
+@api.route("/api/v1/track/<track_uid>/leaderboard", methods = [ "GET" ])
+@decorators.account_setup_required()
+@decorators.get_track(should_belong_to_user = False)
+def page_track_leaderboard(track, **kwargs):
+    """Perform a GET request to page the leaderboard for the given track. Supply a query argument 'p' to identify the page we have requested. On success, the route will
+    return a page object containing the Track, ordered finished race outcomes, the current page number and the next page number (or None if there are no more.)"""
+    try:
+        # Get the page argument. By default, page one.
+        page = request.args.get("p", 1)
+        # With the track and the requested page, create a new track view model and get back a SerialisablePagination object from the view model.
+        track_view_model = viewmodel.TrackViewModel(current_user, track)
+        leaderboard_sp = track_view_model.page_leaderboard(page)
+        # Now, return this as a paged response, providing a base dict containing the serialised track view model, too.
+        return leaderboard_sp.as_paged_response(base_dict = dict(
+            track = track_view_model.serialise())), 200
+    except Exception as e:
+        raise e
+    
+
+@api.route("/api/v1/track/<track_uid>/comments", methods = [ "GET" ])
+@decorators.account_setup_required()
+@decorators.get_track(should_belong_to_user = False)
+def page_track_comments(track, **kwargs):
+    """Perform a GET request to page the comments for the given track. Supply a query argument 'p' to identify the page we have requested. On success, the route will
+    return a page object containing the Track, the requested page of comments, the current page number and the next page number (or None if there are no more.)"""
+    try:
+        # Get the page argument. By default, page one.
+        page = request.args.get("p", 1)
+        # With the track and the requested page, create a new track view model and get back a SerialisablePagination object from the view model.
+        track_view_model = viewmodel.TrackViewModel(current_user, track)
+        comments_sp = track_view_model.page_comments(page)
+        # Now, return this as a paged response, providing a base dict containing the serialised track view model, too.
+        return comments_sp.as_paged_response(base_dict = dict(
+            track = track_view_model.serialise())), 200
+    except Exception as e:
+        raise e
+    
 
 @api.errorhandler(error.AccountActionNeeded)
 def account_action_needed(e):

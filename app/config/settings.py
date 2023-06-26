@@ -44,8 +44,8 @@ class BaseConfig(private.PrivateBaseConfig, RaceConfigurationMixin, GeospatialCo
     #SERVER_NAME = f"127.0.0.1:{PORT}"
     SERVER_URL = "http://192.168.0.253:5000"
 
-    SERVER_VERSION_TEXT = "0.00.02"
-    SERVER_VERSION_CODE = 2
+    SERVER_VERSION_TEXT = "0.00.03"
+    SERVER_VERSION_CODE = 3
 
     # Streaming configuration.
     MAX_CONTENT_LENGTH = 16 * 1024 * 1024 # 16 MB
@@ -72,6 +72,7 @@ class BaseConfig(private.PrivateBaseConfig, RaceConfigurationMixin, GeospatialCo
     FORWARDED_PREFIX = 0
 
     PAGE_SIZE_LEADERBOARD = 20
+    PAGE_SIZE_COMMENTS = 15
 
     def __init__(self):
         self.make_dirs()

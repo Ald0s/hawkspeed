@@ -13,7 +13,7 @@ from flask_login import FlaskLoginClient
 from flask_testing import TestCase
 from werkzeug.datastructures import FileStorage
 
-from app import create_app, db, models, config, factory, error, compat, world, races
+from app import create_app, db, models, config, factory, error, compat, world, races, tracks
 
 
 class BaseCase(TestCase):
@@ -111,6 +111,29 @@ class BaseCase(TestCase):
         self.mocked_file_uploads.append(new_mocked_file)
         # And return.
         return new_mocked_file
+    
+    def create_track_from_gpx(self, user, filename, **kwargs):
+        """Import an a track using the tracks module, given the filename and keyword arguments, and set its ownership to the User given."""
+        created_track = tracks.create_track_from_gpx(filename, **kwargs)
+        # Set owner.
+        created_track.set_owner(user)
+        db.session.flush()
+        return created_track.track
+
+    def make_finished_track_user_race(self, track, user, started, finished, **kwargs):
+        """"""
+        # Create the new instance with started set.
+        track_user_race = models.TrackUserRace(
+            started = started)
+        # Set track and User.
+        track_user_race.set_track_and_user(track, user)
+        # Add to session and flush to get a new UID.
+        db.session.add(track_user_race)
+        db.session.flush()
+        # Set this as finished.
+        track_user_race.set_finished(finished)
+        db.session.flush()
+        return track_user_race
 
     def simulate_entire_race(self, user, track, gpx_absolute_path, **kwargs):
         race_simulator = PlayerRaceGPXSimulator(user, gpx_absolute_path)
@@ -127,7 +150,12 @@ class BaseCase(TestCase):
             if user.has_ongoing_race:
                 update_race_participation_result = races.update_race_participation_for(user, player_update_result)
                 db.session.flush()
+        # Now, expire User and Race.
+        db.session.expire(race)
+        db.session.expire(user)
+        # Ensure race is finished, and ensure user has no ongoing race.
         self.assertEqual(race.is_finished, True)
+        self.assertEqual(user.has_ongoing_race, False)
         return race
 
 

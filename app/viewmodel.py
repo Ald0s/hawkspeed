@@ -53,7 +53,7 @@ class SerialisablePagination(Pagination):
         """Return a list of each internal item. If there are no items, an empty list is returned."""
         if not self._pagination.items:
             return []
-        return [ self._transform_item(item) for item in self._pagination.items ]
+        return [self._transform_item(item) for item in self._pagination.items]
 
     def __init__(self, _pagination, **kwargs):
         self._pagination = _pagination
@@ -64,9 +64,9 @@ class SerialisablePagination(Pagination):
         """Return a serialised list of all items in the page, via the instance of serialise_via_schema if given."""
         if self._SerialiseViaSchemaCls:
             # For each item, instantiate the serialise via schema class and then serialise each item through that.
-            return [ self._SerialiseViaSchemaCls(**kwargs).dump(item) for item in self.items ]
+            return [self._SerialiseViaSchemaCls(**kwargs).dump(item) for item in self.items]
         else:
-            return [ item.serialise(**kwargs) for item in self.items ]
+            return [item.serialise(**kwargs) for item in self.items]
 
     def as_paged_response(self, base_dict = dict()):
         """Returns this class as a page dto containing the serialised items, the current page number and the next page number.
@@ -107,7 +107,7 @@ class ViewModelPagination(SerialisablePagination):
         """Return a list of each internal item mapped to a typed view model with the given actor. If there are no items, an empty list is returned."""
         if not self._pagination.items:
             return []
-        return [ self._ViewModelCls(self._actor, self._transform_item(item), *self._extra_vm_args) for item in self._pagination.items ]
+        return [self._ViewModelCls(self._actor, self._transform_item(item), *self._extra_vm_args) for item in self._pagination.items]
 
     def __init__(self, _pagination, _actor, _ViewModelCls, **kwargs):
         super().__init__(_pagination, **kwargs)
@@ -119,7 +119,7 @@ class ViewModelPagination(SerialisablePagination):
         """Return a serialised list of all items in the page, as view models."""
         if not issubclass(self._ViewModelCls, SerialisableMixin):
             raise TypeError(f"ViewModel class {self._ViewModelCls} is not serialisable, and therefore can't be serialised by ViewModelPagination.")
-        return [ item.serialise(**kwargs) for item in self.items ]
+        return [item.serialise(**kwargs) for item in self.items]
 
     @classmethod
     def make(cls, pagination, actor, ViewModelCls, **kwargs):
@@ -144,6 +144,66 @@ class ViewModelPagination(SerialisablePagination):
             transform_item = transform_item, extra_vm_args = extra_vm_args)
 
 
+class ViewModelList():
+    """A custom wrapper that allows the serialisation of a list of view models."""
+    @property
+    def num_items(self):
+        """Return the number of items in this list."""
+        return len(self._items)
+
+    @property
+    def items(self):
+        """Return a list of each internal item mapped to a typed view model with the given actor. If there are no items, an empty list is returned."""
+        if not self._items:
+            return []
+        return [self._ViewModelCls(self._actor, self._transform_item(item), *self._extra_vm_args) for item in self._items]
+
+    def __init__(self, _items, _actor, _ViewModelCls, **kwargs):
+        self._items = _items
+        self._actor = _actor
+        self._ViewModelCls = _ViewModelCls
+
+        self._extra_vm_args = kwargs.get("extra_vm_args", [])
+        self._transform_item = kwargs.get("transform_item", lambda item: item)
+
+    def serialise(self, **kwargs):
+        """Return a serialised list of all items in the list, as view models."""
+        if not issubclass(self._ViewModelCls, SerialisableMixin):
+            raise TypeError(f"ViewModel class {self._ViewModelCls} is not serialisable, and therefore can't be serialised by {type(self)}.")
+        return [item.serialise(**kwargs) for item in self.items]
+
+    def as_dict(self, base_dict = dict(), **kwargs):
+        """Returns this class as a dto containing the serialised items. Optionally, a dictionary instance can be provided to instead augment with the other attributes,
+        otherwise a blank dict will be started with."""
+        return {
+            **dict(
+                items = self.serialise(**kwargs)),
+            **base_dict
+        }
+
+    @classmethod
+    def make(cls, items, actor, ViewModelCls, **kwargs):
+        """Make and return a view model list wrapper object.
+
+        Arguments
+        ---------
+        :items: A list of items type defined by Flask-SQLAlchemy, each of which will be the patient in a view model.
+        :actor: An instance of the actor to use in the view model relationship for each item in the list.
+        :ViewModelCls: The ViewModel type to instantiate each item as.
+
+        Keyword arguments
+        -----------------
+        :extra_vm_args: A list of items to be spread across the constructor for the given view model class, at the end.
+        :transform_item: A lambda function that, if given, will be applied to each item within the list prior to being serialised."""
+        transform_item = kwargs.get("transform_item", lambda item: item)
+        extra_vm_args = kwargs.get("extra_vm_args", [])
+        """TODO: validate each var here."""
+        if items == None or not actor or not ViewModelCls:
+            raise Exception("ViewModelList() failed; actor, items and ViewModelCls must be given.")
+        return ViewModelList(items, actor, ViewModelCls,
+            transform_item = transform_item, extra_vm_args = extra_vm_args)
+    
+    
 class SerialisableMixin():
     """Makes an implementing type able to be serialised.
     This usually refers to serialization through a schema that presents the maximum amount of data available."""
@@ -175,8 +235,33 @@ class SerialiseViewModelField(fields.Field):
         return value.serialise(**nested_serialisation_kwargs)
 
     def _deserialize(self, value, attr, data, **kwargs):
-        raise NotImplementedError("serialiseViewModelField can not deserialise!")
+        raise NotImplementedError("SerialiseViewModelField can not deserialise!")
 
+
+class SerialiseViewModelListField(fields.Field):
+    """Field that only serialises ViewModelList objects."""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.dump_only = True
+        self.base_dict = kwargs.get("base_dict", dict())
+
+    def _serialize(self, value, attr, obj, **kwargs):
+        if value is None and not self.allow_none:
+            """TODO: implement properly."""
+            raise NotImplementedError("Failed to serialise view model list, allow_none is False yet the given view model list is None.")
+        if not isinstance(value, ViewModelList):
+            raise TypeError(f"Failed to serialise a view model list, the given value is not an instance of ViewModelList; {value}")
+        # Get the value as dict, supplying the base dictionary given by ctor.
+        value_as_dict = value.as_dict(self.base_dict)
+        # If base dict is an empty dictionary, there are no additional arguments, so there's no need for the encapsulating items object, return the contents
+        # of the items key. Otherwise, return this value.
+        if not self.base_dict:
+            return value_as_dict["items"]
+        return value_as_dict
+
+    def _deserialize(self, value, attr, data, **kwargs):
+        raise NotImplementedError("SerialiseViewModelListField can not deserialise!")
+    
 
 """ViewModels begin."""
 class BaseViewModel(SerialisableMixin):
@@ -217,22 +302,37 @@ class BaseViewModel(SerialisableMixin):
 
 
 class LeaderboardEntryViewModel(BaseViewModel):
-    """A view model for representing a specific user's race outcome as a leaderboard entry."""
+    """A view model for representing a specific user's race outcome as a leaderboard entry. We'll use a view model for this to allow users to like and
+    comment on entries."""
     class LeaderboardEntryViewSchema(Schema):
         """A schema representing a single TrackUserRace outcome for this track."""
-        uid                 = fields.Str(data_key = "race_uid")
-        finishing_place     = fields.Int()
-        started             = fields.Int()
-        finished            = fields.Int()
-        stopwatch           = fields.Int()
+        class Meta:
+            unknown = EXCLUDE
+        # The track user race's UID that this leaderboard belongs to. Can't be None.
+        race_uid            = fields.Str(required = True, allow_none = False)
+        # The place held by this race result. Can't be None.
+        finishing_place     = fields.Int(required = True, allow_none = False)
+        # A timestamp, in milliseconds, when the race began. Can't be None.
+        started             = fields.Int(required = True, allow_none = False)
+        # A timestamp, in milliseconds, when the race ended. Can't be None.
+        finished            = fields.Int(required = True, allow_none = False)
+        # The total recorded time, in milliseconds, for this race. Can't be None.
+        stopwatch           = fields.Int(required = True, allow_none = False)
+        # The Player that completed this race. Can't be None.
         player              = SerialiseViewModelField(required = True, allow_none = False)
-        track_uid           = fields.Str()
+        # The UID for the Track that was raced on. Can't be None.
+        track_uid           = fields.Str(required = True, allow_none = False)
 
     @property
-    def uid(self):
+    def race_uid(self):
         """The race's UID."""
         return self.patient.uid
 
+    @property
+    def finishing_place(self):
+        """Return the finishing place for this leaderboard entry."""
+        return self.patient.finishing_place
+    
     @property
     def started(self):
         """When this race started, in milliseconds."""
@@ -313,6 +413,87 @@ class TrackPathViewModel(BaseViewModel):
         return schema.dump(self)
     
 
+class TrackCommentViewModel(BaseViewModel):
+    """A view model that provides control over a specific comment posted toward a track."""
+    class TrackCommentViewSchema(BaseViewModel.BaseViewSchema):
+        """A schema for dumping the state of a track comment."""
+        class Meta:
+            unknown = EXCLUDE
+        ### First, information about the Comment ###
+        # This comment's UID. Can't be None.
+        uid                 = fields.Str(required = True, allow_none = False)
+        # When this comment was created. Can't be None.
+        created             = fields.Int(required = True, allow_none = False)
+        # This comment's text. Can't be None.
+        text                = fields.Str(required = True, allow_none = False)
+        # The Track's UID. Can't be None.
+        track_uid           = fields.Str(required = True, allow_none = False)
+
+        ### Now some objects ###
+        # The User that created this comment. Can't be None.
+        user                = SerialiseViewModelField(allow_none = False)
+    
+    @property
+    def uid(self):
+        """Return the comment's UID."""
+        return self.patient.uid
+    
+    @property
+    def created(self):
+        """Return the timestamp, in seconds, when this comment was created."""
+        return self.patient.created
+    
+    @property
+    def text(self):
+        """Return this comment's text."""
+        return self.patient.text 
+    
+    @property
+    def user(self) -> UserViewModel:
+        """Return a user view model for the User that created this comment."""
+        return UserViewModel(self.actor, self.patient.user)
+    
+    @property
+    def track_uid(self):
+        """Return the Track UID for the track this comment is posted toward."""
+        return self.patient.track_uid
+    
+    @property
+    def can_edit(self):
+        """Returns True only if the actor is the User that created the Comment."""
+        return self.actor == self.patient.user
+    
+    @property
+    def can_delete(self):
+        """Returns True only if the actor is the User that created the Comment."""
+        return self.actor == self.patient.user
+
+    def serialise(self, **kwargs):
+        """Serialise and return this track view model."""
+        schema = self.TrackCommentViewSchema(**kwargs)
+        return schema.dump(self)
+    
+    def edit(self, request_comment, **kwargs) -> TrackCommentViewModel:
+        """"""
+        try:
+            if not self.can_edit:
+                """TODO: handle this action not allowed here."""
+                raise NotImplementedError("Failed to edit comment due to permissions - not handled.")
+            raise NotImplementedError()
+        except Exception as e:
+            raise e
+        
+    def delete(self, **kwargs):
+        """"""
+        try:
+            if not self.can_delete:
+                """TODO: handle this action not allowed here."""
+                raise NotImplementedError("Failed to delete comment due to permissions - not handled.")
+            raise NotImplementedError()
+        except Exception as e:
+            raise e
+    
+
 class TrackViewModel(BaseViewModel):
     """A view model that provides detail functionality specifically for Track entities.""" 
     class TrackViewSchema(BaseViewModel.BaseViewSchema):
@@ -326,6 +507,8 @@ class TrackViewModel(BaseViewModel):
         description         = fields.Str(required = True, allow_none = False)
         # The Track's owner. Can't be None.
         owner               = SerialiseViewModelField(required = True, allow_none = False)
+        # The top three entries on this track's leaderboard. Can't be None.
+        top_leaderboard     = SerialiseViewModelListField(required = True, allow_none = False)
 
         ### Second, state data. ###
         # The track's start point. Can't be None.
@@ -346,6 +529,8 @@ class TrackViewModel(BaseViewModel):
         can_edit            = fields.Bool(required = True, allow_none = False)
         # Can the actor delete this track? Can't be None.
         can_delete          = fields.Bool(required = True, allow_none = False)
+        # Can the actor comment on this track? Can't be None.
+        can_comment         = fields.Bool(required = True, allow_none = False)
 
     @property
     def uid(self):
@@ -367,6 +552,14 @@ class TrackViewModel(BaseViewModel):
         if not self.patient.has_owner:
             return None
         return UserViewModel(self.actor, self.patient.user)
+    
+    @property
+    def top_leaderboard(self) -> ViewModelList:
+        """Return a view model list of the top three entries in this track's leaderboard."""
+        top_leaderboard_entries = tracks.leaderboard_query_for(self.patient)\
+            .limit(3)\
+            .all()
+        return ViewModelList.make(top_leaderboard_entries, self.actor, LeaderboardEntryViewModel)
 
     @property
     def path(self) -> TrackPathViewModel:
@@ -398,7 +591,7 @@ class TrackViewModel(BaseViewModel):
     @property
     def your_rating(self):
         """Returns True if the actor has voted for this Track, or False otherwise. None is returned if no vote has been placed."""
-        return tracks.get_user_vote(self.patient, self.actor)
+        return tracks.get_user_rating(self.patient, self.actor)
     
     @property
     def num_comments(self):
@@ -419,6 +612,11 @@ class TrackViewModel(BaseViewModel):
     def can_delete(self):
         """TODO"""
         return False
+    
+    @property
+    def can_comment(self):
+        """Returns True if the actor can comment on this Track. The only requirement is that the actor has completed this track at least once."""
+        return tracks.has_user_finished(self.patient, self.actor)
 
     def serialise(self, **kwargs):
         """Serialise and return a TrackViewSchema representing the view relationship between the actor entity and the patient Track.
@@ -427,6 +625,65 @@ class TrackViewModel(BaseViewModel):
         -------
         A dumped instance of TrackViewSchema."""
         return TrackViewModel.TrackViewSchema(**kwargs).dump(self)
+
+    def rate(self, request_rating, **kwargs):
+        """Set the rating of this track from the perspective of the actor to the given request.
+        
+        Arguments
+        ---------
+        :request_rating: An instance of RequestRating."""
+        try:
+            tracks.set_user_rating(self.patient, self.actor, request_rating)
+        except Exception as e:
+            raise e
+        
+    def clear_rating(self, **kwargs):
+        """Clear any rating from the current actor toward this track."""
+        try:
+            tracks.clear_user_rating(self.patient, self.actor)
+        except Exception as e:
+            raise e
+    
+    def comment(self, request_comment, **kwargs) -> TrackCommentViewModel:
+        """Perform a comment toward this track with the given comment content. If successful, this function will return a new track comment view model
+        referring to the track comment.
+        
+        Arguments
+        ---------
+        :request_comment: An instance of RequestComment.
+        
+        Returns
+        -------
+        A TrackComment view model."""
+        try:
+            if not self.can_comment:
+                """TODO: handle this permissions issue properly."""
+                raise NotImplementedError("User attempted to comment on a track but is not allowed to. Also this isn't handled.")
+            raise NotImplementedError()
+        except Exception as e:
+            raise e
+        
+    def find_comment(self, comment_uid, **kwargs) -> TrackCommentViewModel:
+        """Search for and return a track comment view model for the desired comment, that should be posted toward this track. If no comment can be found,
+        this function will fail with a ValueError. This function will not ensure actor is able to perform any actions.
+        
+        Arguments
+        ---------
+        :comment_uid: A track comment's UID.
+        
+        Returns
+        -------
+        An instance of TrackCommentViewModel."""
+        try:
+            # Get the comment.
+            track_comment = tracks.get_track_comment(self.patient, comment_uid)
+            # If none is returned, raise a value error.
+            if not track_comment:
+                raise ValueError
+            # Otherwise, return a track comment view model.
+            return TrackCommentViewModel(self.actor, track_comment)
+        except Exception as e:
+            raise e
 
     def page_leaderboard(self, page = 1, **kwargs) -> ViewModelPagination:
         """Page the leaderboard for this track. This will query a list of of TrackUserRace instances from this track, ordered to reflect fastest to slowest.
@@ -441,7 +698,8 @@ class TrackViewModel(BaseViewModel):
         A ViewModelPagination object."""
         try:
             return ViewModelPagination.make(
-                tracks.page_leaderboard_for(self.patient, page).paginate(page = page, per_page = config.PAGE_SIZE_LEADERBOARD, max_per_page = config.PAGE_SIZE_LEADERBOARD, error_out = False),
+                tracks.leaderboard_query_for(self.patient).paginate(
+                    page = page, per_page = config.PAGE_SIZE_LEADERBOARD, max_per_page = config.PAGE_SIZE_LEADERBOARD, error_out = False),
                 self.actor,
                 LeaderboardEntryViewModel)
         except Exception as e:
@@ -459,8 +717,11 @@ class TrackViewModel(BaseViewModel):
         -------
         A ViewModelPagination object."""
         try:
-            """TODO: a comments view model."""
-            raise NotImplementedError()
+            return ViewModelPagination.make(
+                tracks.comments_query_for(self.patient).paginate(
+                    page = page, per_page = config.PAGE_SIZE_COMMENTS, max_per_page = config.PAGE_SIZE_COMMENTS, error_out = False),
+                self.actor,
+                TrackCommentViewModel)
         except Exception as e:
             raise e
 

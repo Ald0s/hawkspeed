@@ -69,21 +69,6 @@ class PlayerUpdateResponseSchema(Schema):
     world_object_update     = fields.Nested(WorldObjectUpdateResponseSchema, many = False, allow_none = True)
 
 
-class RaceFinishedSchema(races.RaceUpdateSchema):
-    """A one-way message from the server to the client, informing them that the current race is complete."""
-    pass
-
-
-class RaceCancelledSchema(races.RaceUpdateSchema):
-    """A one-way message from the server to the client, informing them that their current race has been cancelled."""
-    pass
-
-
-class RaceDisqualifiedSchema(races.RaceUpdateSchema):
-    """A one-way message from the server to the client, informing them that their current race has been disqualified."""
-    pass
-
-
 class WorldNamespace(Namespace):
     """The primary world namespace, this will handle all communication relating to the game aspect of HawkSpeed. All handlers require that the incoming User is at least
     authenticated via flask login. The other functions require also that the incoming User is joined to the world."""
@@ -140,56 +125,11 @@ class WorldNamespace(Namespace):
             raise e
 
     @joined_players_only()
-    def on_start_race(self, race_j, **kwargs):
-        """Handle intent from a Player to start a new race. This will aggressively cancel any existing races. The submitted content should have a location snapshot taken when
-        countdown started, and when the actual race started. As well, the desired track's UID should be supplied. This handler will respond with a confirmation schema, or an
-        error schema. On the clientside, the DTO should support a merging of both potential states."""
-        try:
-            # Before anything else, since we received intent to start a new race, cancel any ongoing race for the current User. If any, the existing race will be returned.
-            old_ongoing_race = races.cancel_ongoing_race(current_user)
-            if old_ongoing_race:
-                # We had an existing race, which is now cancelled. Prior to committing, we need to emit an event to the client letting it know this race has been cancelled.
-                race_cancelled_schema = RaceCancelledSchema()
-                race_cancelled_d = race_cancelled_schema.dump(old_ongoing_race)
-                emit("race-cancelled", race_cancelled_d,
-                    sid = request.sid)
-            # Load the intent to start a new race.
-            request_start_race_schema = races.RequestStartRaceSchema()
-            request_start_race = request_start_race_schema.load(race_j)
-            try:
-                # Then parse the received started location data as a player update, to get back a player update result. This will also log the start point for the new race.
-                player_update_result = world.parse_player_update(current_user, request_start_race.started_position)
-            except world.ParsePlayerUpdateError as ppue:
-                # The update was not able to be parsed. This is grounds for a race start error, but we must map reasons from parse player update error to relevant
-                # start race error reasons.
-                if ppue.reason_code == world.ParsePlayerUpdateError.REASON_POSITION_NOT_SUPPORTED:
-                    # Raise this to be handled locally, in the handler for on start race.
-                    raise races.RaceStartError(races.RaceStartError.REASON_POSITION_NOT_SUPPORTED)
-                else:
-                    """TODO: properly implement this."""
-                    LOG.error(f"An unsupported condition was hit in ParsePlayerUpdateError handler within on_start_race! Reason code: {ppue.reason_code}")
-                    raise NotImplementedError()
-            # Now that we have our player update result, pass it alongside the start race request to the races module, for a new race to be created. A StartRaceResult is expected.
-            # This function call may also raise a RaceStartError.
-            start_race_result = races.start_race_for(current_user, request_start_race, player_update_result)
-            # If we've made it this far, we can commit.
-            db.session.commit()
-            # Start race result will contain both a positive and negative result. Either way, we will return it as a serialised response.
-            return start_race_result.serialise()
-        except races.RaceStartError as rse:
-            # Race start errors will be handled here, 
-            db.session.rollback()
-            start_race_result = races.StartRaceResult(False, 
-                error_code = rse.reason_code)
-            return start_race_result.serialise()
-        except Exception as e:
-            db.session.rollback()
-            raise e
-
-    @joined_players_only()
     def on_player_update(self, update_j, **kwargs):
         """Called when a player sends a message to update their location in the world. This handler will ensure the location is supported and valid, and will then commit its changes
-        to the database. The response returned will be a receipt of the newly accepted changes to location data, as well as world objects that are close to the player by proximity."""
+        to the database. As well as updating the player's location within the world, this function will update any ongoing race participations the Player is involved in. If the race
+        is disqualified or finished, this function will emit messages along these lines, but will not return those messages. The response returned will be a receipt of the newly
+        accepted changes to location data, as well as world objects that are close to the player by proximity."""
         try:
             # Load a new request for complete player update.
             request_player_update_schema = world.RequestPlayerUpdateSchema()
@@ -202,24 +142,20 @@ class WorldNamespace(Namespace):
                 raise ppue
             # Only bother executing race participation updates if the current User has an ongoing race.
             if current_user.has_ongoing_race:
-                try:
-                    # Update this Player's participation in any race, get back a participation result.
-                    update_race_participation_result = races.update_race_participation_for(current_user, player_update_result)
-                    if update_race_participation_result.is_finished:
-                        # The Player has successfully finished the race. For now, a race update will simply be sent to the race-finished event.
-                        """TODO: make this reaction a bit more complicated."""
-                        race_finished_schema = RaceFinishedSchema()
-                        race_finished_d = race_finished_schema.dump(update_race_participation_result.track_user_race)
-                        emit("race-finished", race_finished_d,
-                            sid = request.sid)
-                except races.RaceDisqualifiedError as rde:
-                    """TODO: this should handle the raising of an error named UpdateRaceParticipationError, which in turn contains information specific to disqualification etc."""
-                    raise NotImplementedError()
-                    # On disqualification, the race should already be disqualified.
-                    #race_disqualified_schema = RaceDisqualifiedSchema()
-                    #race_disqualified_d = race_disqualified_schema.dump(rde.track_user_race)
-                    #emit("race-disqualified", race_disqualified_d,
-                    #    sid = request.sid)
+                # Update this Player's participation in any race, get back a participation result.
+                update_race_participation_result = races.update_race_participation_for(current_user, player_update_result)
+                # Serialise the result.
+                update_race_response = update_race_participation_result.serialise()
+                # Now, emit a message with the proper name depending on the outcome.
+                if update_race_participation_result.is_finished:
+                    emit("race-finished", update_race_response,
+                        sid = request.sid)
+                elif update_race_participation_result.is_disqualified:
+                    emit("race-disqualified", update_race_response,
+                        sid = request.sid)
+                else:
+                    emit("race-progress", update_race_response,
+                        sid = request.sid)
             # Calculations and updates are done, we can commit to database, then return the serialised response.
             db.session.commit()
             player_update_response_schema = PlayerUpdateResponseSchema()
@@ -250,7 +186,72 @@ class WorldNamespace(Namespace):
             a failure-type object that informs client of the issue."""
         except Exception as e:
             raise e
+    
+    @joined_players_only()
+    def on_start_race(self, race_j, **kwargs):
+        """Handle intent from a Player to start a new race. The submitted content should have a location snapshot taken when countdown started, and when the actual race
+        started. As well, the desired track's UID should be supplied. This handler will respond with a start race result schema which will communicate whether the race
+        was started or an issue occurred.
 
+        If a race is ongoing, this function will fail and return an error in the result.
+        
+        Socket Errors & Exceptions
+        --------------------------
+        The error_code in StartRaceResult can be ANY of the codes supported by the following entities:
+          1. RaceStartError"""
+        try:
+            if races.get_ongoing_race(current_user) != None:
+                # If there is an ongoing race, raise the appropriate race start error, with reason REASON_ALREADY_IN_RACE.
+                raise races.RaceStartError(races.RaceStartError.REASON_ALREADY_IN_RACE)
+            # Load the intent to start a new race.
+            request_start_race_schema = races.RequestStartRaceSchema()
+            request_start_race = request_start_race_schema.load(race_j)
+            try:
+                # Then parse the received started location data as a player update, to get back a player update result. This will also log the start point for the new race.
+                player_update_result = world.parse_player_update(current_user, request_start_race.started_position)
+            except world.ParsePlayerUpdateError as ppue:
+                # The update was not able to be parsed. This is grounds for a race start error, but we must map reasons from parse player update error to relevant
+                # start race error reasons.
+                if ppue.reason_code == world.ParsePlayerUpdateError.REASON_POSITION_NOT_SUPPORTED:
+                    # Raise this to be handled locally, in the handler for on start race.
+                    raise races.RaceStartError(races.RaceStartError.REASON_POSITION_NOT_SUPPORTED)
+                else:
+                    """TODO: properly implement this."""
+                    LOG.error(f"An unsupported condition was hit in ParsePlayerUpdateError handler within on_start_race! Reason code: {ppue.reason_code}")
+                    raise NotImplementedError()
+            # Now that we have our player update result, pass it alongside the start race request to the races module, for a new race to be created. A StartRaceResult is expected.
+            # This function call may also raise a RaceStartError.
+            start_race_result = races.start_race_for(current_user, request_start_race, player_update_result)
+            # If we've made it this far, we can commit.
+            db.session.commit()
+            # Start race result will contain both a positive and negative result. Either way, we will return it as a serialised response.
+            return start_race_result.serialise()
+        except races.RaceStartError as rse:
+            # Rollback transaction, then build a new start race result that contains the failure reason and return this as receipt.
+            db.session.rollback()
+            start_race_result = races.StartRaceResult(False, 
+                error_code = rse.reason_code)
+            return start_race_result.serialise()
+        except Exception as e:
+            db.session.rollback()
+            raise e
+    
+    @joined_players_only()
+    def on_cancel_race(self, cancel_j, **kwargs):
+        """Cancel the currently ongoing race, and return a race cancelled response as a result. If there is no ongoing race, this function will respond with a None-like race cancelled result.
+        
+        Socket Errors & Exceptions
+        --------------------------
+        The error_code in CancelRaceResult can be ANY of the codes supported by the following entities:
+          1. CancelRaceResult"""
+        try:
+            # Attempt to cancel any ongoing races.
+            cancel_race_result = races.cancel_ongoing_race(current_user)
+            # Serialise and return result.
+            return cancel_race_result.serialise()
+        except Exception as e:
+            raise e
+        
 
 def handle_world_error(e):
     """Where we handle general world errors. If required, this is where we actually map server-only errors that relate to the world module, to response compatible errors that can be

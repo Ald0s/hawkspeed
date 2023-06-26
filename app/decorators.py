@@ -9,7 +9,7 @@ from flask import request, g, redirect, url_for, render_template
 from flask_login import current_user, login_required as flask_login_required
 from werkzeug.exceptions import Unauthorized
 
-from . import db, config, models, error#, viewmodel
+from . import db, config, models, error, tracks, users
 
 LOG = logging.getLogger("hawkspeed.decorators")
 LOG.setLevel( logging.DEBUG )
@@ -92,6 +92,39 @@ def account_setup_required(**kwargs):
     return decorator
 
 
+def get_user(**kwargs):
+    """Locate a User with the given User UID passed in keyword arguments.
+
+    Keyword arguments
+    -----------------
+    :user_uid_key: The key under which the UID for the User to be grabbed. Default is 'user_uid'.
+    :user_output_key: The key under which the located User should be passed. Default is 'user'.
+    :required: A boolean; True if the route should fail if the User not found. Default is True."""
+    user_uid_key = kwargs.get("user_uid_key", "user_uid")
+    user_output_key = kwargs.get("user_output_key", "user")
+    required = kwargs.get("required", True)
+
+    def decorator(f):
+        @account_setup_required()
+        @wraps(f)
+        def decorated_view(*args, **kwargs):
+            # Get the incoming User UID.
+            user_uid = kwargs.get(user_uid_key, None)
+            # Attempt to find the User.
+            user = users.find_existing_user(
+                user_uid = user_uid)
+            # If no User found, raise an error.
+            if not user:
+                """TODO: handle this properly."""
+                raise NotImplementedError("Could not find user by UID in decorator. This is not handled either.")
+            # Finally, pass the User back via output key.
+            kwargs[user_output_key] = user
+            # And call original function.
+            return f(*args, **kwargs)
+        return decorated_view
+    return decorator
+
+
 def get_track(**kwargs):
     """Get a track from the incoming keyword arguments. If the route is not found, this decorator will raise an exception. It is required that the User's account
     is totally setup prior to using any routes decorated with this.
@@ -112,7 +145,8 @@ def get_track(**kwargs):
             # Get the incoming track UID.
             track_uid = kwargs.get(track_uid_key, None)
             # Attempt to find the Track.
-            track = models.Track.find(track_uid = track_uid)
+            track = tracks.find_existing_track(
+                track_uid = track_uid)
             # If no track found, raise an error.
             if not track:
                 """TODO: handle this properly."""

@@ -13,3 +13,14 @@
 * Changed models.py to adhere to sqlalchemy 2.0 format,
 * Added track ratings,
 * Added track comments,
+
+## Version 0.00.03
+* Added rating set/clear API, viewmodel and module functionality,
+* Added comments API and viewmodel functionality,
+* Created track comment view model,
+* Wrote test case for track rating,
+* Fixed track leaderboard test case,
+* Added track comments API and viewmodel functionality,
+* Added top leaderboard entries to track viewmodel w/ test case,
+* Added User API and module,
+* Improved race cancellation and race participation updates.

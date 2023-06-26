@@ -94,7 +94,7 @@ class TestLoginLogout(BaseAPICase):
         )
         # Ensure request was successful.
         self.assertEqual(login_request.status_code, 200)
-        self.assertEqual(login_request.json["profile_setup"], False)
+        self.assertEqual(login_request.json["is_profile_setup"], False)
         # Verify the user.
         aldos.set_verified(True)
         db.session.flush()
@@ -204,7 +204,8 @@ class TestRegistrationAndSetup(BaseAPICase):
             # Try setup profile. We should fail because account-not-verified.
             setup_profile_d = dict(
                 username = "Alden",
-                bio = None
+                bio = None,
+                vehicle_information = "1994 Toyota Supra"
             )
             setup_profile_request = client.post(url_for("api.setup_profile"),
                 data = json.dumps(setup_profile_d),
@@ -238,7 +239,7 @@ class TestRegistrationAndSetup(BaseAPICase):
         # Log aldos in.
         with self.app.test_client(user = aldos) as client:
             setup_profile_response = client.post(url_for("api.setup_profile"),
-                data = json.dumps(dict(username = "aldos", bio = "This is a bio.")),
+                data = json.dumps(dict(username = "aldos", bio = "This is a bio.", vehicle_information = "1994 Toyota Supra")),
                 content_type = "application/json")
             # Should have succeeded.
             self.assertEqual(setup_profile_response.status_code, 200)
@@ -248,32 +249,37 @@ class TestRegistrationAndSetup(BaseAPICase):
             self.assertEqual(account_d["username"], "aldos")
             self.assertEqual(aldos.bio, "This is a bio.")
             # Finally, confirm that profile is setup.
-            self.assertEqual(account_d["profile_setup"], True)
+            self.assertEqual(account_d["is_profile_setup"], True)
 
 
+class TestUserAPI(BaseAPICase):
+    def test_get_user(self):
+        """"""
+        self.assertEqual(True, False)
+
+        
 class TestTrackAPI(BaseAPICase):
-    def test_query_track_path(self):
+    def test_query_track_with_path(self):
         """Import a test GPX route.
         Create a new User.
-        Perform a query for the track's path.
+        Perform a query for the track with its path.
         Ensure request was successful, UIDs matched and the number of points is not 0."""
         # Create a new User.
         aldos = factory.create_user("alden@mail.com", "password",
             username = "alden", verified = True)
         # Test that we can load a track from GPX.
-        track_from_gpx = tracks.create_track_from_gpx("example1.gpx",
+        track = self.create_track_from_gpx(aldos, "example1.gpx",
             intersection_check = False)
-        db.session.flush()
         # Now that we're here, start a test client and log aldos in.
         with self.app.test_client(user = aldos) as client:
-            track_path_response = client.get(url_for("api.get_track_path", track_uid = track_from_gpx.uid))
+            track_with_path_response = client.get(url_for("api.get_track_with_path", track_uid = track.uid))
             # Ensure this request was successful.
-            self.assertEqual(track_path_response.status_code, 200)
-            track_path_json = track_path_response.json
+            self.assertEqual(track_with_path_response.status_code, 200)
+            track_with_path_json = track_with_path_response.json
             # Ensure the UID matches.
-            self.assertEqual(track_path_json["track_uid"], track_from_gpx.uid)
+            self.assertEqual(track_with_path_json["track"]["uid"], track.uid)
             # Ensure there are more than 0 points in the response.
-            self.assertNotEqual(len(track_path_json["points"]), 0)
+            self.assertNotEqual(len(track_with_path_json["track_path"]["points"]), 0)
 
     def test_page_race_leaderboard(self):
         """Import a test GPX route.
@@ -287,11 +293,13 @@ class TestTrackAPI(BaseAPICase):
         emily = factory.create_user("emily@mail.com", "password",
             username = "emily")
         # Create a track.
-        track = tracks.create_track_from_gpx("yarra_boulevard.gpx")
+        track = self.create_track_from_gpx(aldos, "yarra_boulevard.gpx")
         db.session.flush()
         # Now, for User1, step through the entire race yarra_boulevard_good_race_1.
         self.simulate_entire_race(aldos, track, os.path.join(os.getcwd(), config.IMPORTS_PATH, "races", "yarra_boulevard_good_race_1.gpx"))
         db.session.flush()
+        # Ensure user 1 has no ongoing race.
+        db.session.refresh(aldos)
         # Now for User2, step through the same race, but at 500 ms slower.
         self.simulate_entire_race(emily, track, os.path.join(os.getcwd(), config.IMPORTS_PATH, "races", "yarra_boulevard_good_race_1.gpx"),
             ms_adjustment = 500)
@@ -311,9 +319,82 @@ class TestTrackAPI(BaseAPICase):
             leaderboard_json = leaderboard_response.json
             # Ensure there are 3 items.
             self.assertEqual(len(leaderboard_json["items"]), 3)
-            # Ensure the very first item's player, is aldos.
+            # Ensure the very first item's player, is aldos. Ensure this race has finishing place 1.
             self.assertEqual(leaderboard_json["items"][0]["player"]["uid"], aldos.uid)
-            # The second is emily.
+            self.assertEqual(leaderboard_json["items"][0]["finishing_place"], 1)
+            # The second is emily. Ensure this race has finishing place 2.
             self.assertEqual(leaderboard_json["items"][1]["player"]["uid"], emily.uid)
-            # The third is aldos.
+            self.assertEqual(leaderboard_json["items"][1]["finishing_place"], 2)
+            # The third is aldos. Ensure this race has finishing place 3.
             self.assertEqual(leaderboard_json["items"][2]["player"]["uid"], aldos.uid)
+            self.assertEqual(leaderboard_json["items"][2]["finishing_place"], 3)
+            # Now, query track detail for this track. Ensure response is 200 then get its json.
+            track_response = client.get(url_for("api.get_track", track_uid = track.uid))
+            self.assertEqual(track_response.status_code, 200)
+            track_json = track_response.json
+            # Ensure there are 3 items in the top leaderboard.
+            self.assertEqual(len(track_json["top_leaderboard"]), 3)
+            # Ensure the first is aldos, the second emily and the third aldos.
+            self.assertEqual(track_json["top_leaderboard"][0]["player"]["uid"], aldos.uid)
+            self.assertEqual(track_json["top_leaderboard"][0]["finishing_place"], 1)
+            # The second is emily. Ensure this race has finishing place 2.
+            self.assertEqual(track_json["top_leaderboard"][1]["player"]["uid"], emily.uid)
+            self.assertEqual(track_json["top_leaderboard"][1]["finishing_place"], 2)
+            # The third is aldos. Ensure this race has finishing place 3.
+            self.assertEqual(track_json["top_leaderboard"][2]["player"]["uid"], aldos.uid)
+            self.assertEqual(track_json["top_leaderboard"][2]["finishing_place"], 3)
+
+    def test_track_rating(self):
+        """Create a User and and import a test track.
+        Authenticate as the User.
+        Perform a request for the track by its UID. Ensure that, in the result, our rating is None, there are 0 likes and 0 dislikes."""
+        # Create a User.
+        aldos = factory.create_user("alden@mail.com", "password",
+            username = "alden")
+        # Create a track.
+        track = self.create_track_from_gpx(aldos, "yarra_boulevard.gpx")
+        # Now, authenticate as the User.
+        with self.app.test_client(user = aldos) as client:
+            # Perform a request for the track. Ensure its response is 200, then get its JSON.
+            track_response = client.get(url_for("api.get_track", track_uid = track.uid))
+            self.assertEqual(track_response.status_code, 200)
+            track_json = track_response.json
+            # Ensure our rating is None, there are 0 likes and dislikes.
+            self.assertEqual(track_json["your_rating"], None)
+            self.assertEqual(track_json["ratings"]["num_positive_votes"], 0)
+            self.assertEqual(track_json["ratings"]["num_negative_votes"], 0)
+            # Now, perform a request to upvote the track. Ensure response is 200, then get its JSON. Ensure our rating is now True, and the track has 1
+            # positive and 0 negative votes.
+            track_response = client.post(url_for("api.rate_track", track_uid = track.uid),
+                data = json.dumps(dict( rating = True )),
+                content_type = "application/json")
+            self.assertEqual(track_response.status_code, 200)
+            track_json = track_response.json
+            # Ensure our rating is True, there is 1 like and 0 dislikes.
+            self.assertEqual(track_json["your_rating"], True)
+            self.assertEqual(track_json["ratings"]["num_positive_votes"], 1)
+            self.assertEqual(track_json["ratings"]["num_negative_votes"], 0)
+            # Now, perform a request to downvote the track. Ensure response is 200, then get its JSON. Ensure our rating is now False, and the track has 0
+            # positive and 1 negative votes.
+            track_response = client.post(url_for("api.rate_track", track_uid = track.uid),
+                data = json.dumps(dict( rating = False )),
+                content_type = "application/json")
+            self.assertEqual(track_response.status_code, 200)
+            track_json = track_response.json
+            # Ensure our rating is False, there is 0 likes and 1 dislike.
+            self.assertEqual(track_json["your_rating"], False)
+            self.assertEqual(track_json["ratings"]["num_positive_votes"], 0)
+            self.assertEqual(track_json["ratings"]["num_negative_votes"], 1)
+            # Finally, perform a request to clear the rating. Ensure response is 200, then get its JSON. Ensure our rating is again None and track has 0
+            # positive and negative ratings.
+            track_response = client.delete(url_for("api.rate_track", track_uid = track.uid))
+            self.assertEqual(track_response.status_code, 200)
+            track_json = track_response.json
+            # Ensure our rating is None, there are 0 likes and dislikes.
+            self.assertEqual(track_json["your_rating"], None)
+            self.assertEqual(track_json["ratings"]["num_positive_votes"], 0)
+            self.assertEqual(track_json["ratings"]["num_negative_votes"], 0)
+    
+    def test_track_comments(self):
+        """"""
+        self.assertEqual(True, False)

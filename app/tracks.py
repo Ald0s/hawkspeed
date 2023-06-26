@@ -11,14 +11,25 @@ import shapely
 from geoalchemy2 import shape
 
 from datetime import datetime, date
-from sqlalchemy import func, asc, desc
+from sqlalchemy import func, asc, desc, delete
 from sqlalchemy.orm import with_expression
 from marshmallow import fields, Schema, post_load, EXCLUDE
 
-from . import db, config, models, decorators, error
+from .compat import insert
+from . import db, config, models, error
 
 LOG = logging.getLogger("hawkspeed.tracks")
 LOG.setLevel( logging.DEBUG )
+
+
+class TrackCantBeRaced(Exception):
+    """An exception that communicates the track the User has attempted to find, for the purpose of racing, is not able to be raced."""
+    pass
+
+
+class NoTrackFound(Exception):
+    """An exception that communicates the track the User has attempted to find does not exist."""
+    pass
 
 
 class TrackAlreadyExists(Exception):
@@ -33,14 +44,13 @@ class TrackInspectionFailed(Exception):
         self.extra_info = kwargs.get("extra_info", None)
 
 
-def page_leaderboard_for(track, page, **kwargs):
-    """Return a query for the desired page of the given track's leaderboard. The leaderboard is simply ordered from slowest stopwatch time to fasted stopwatch time. This function
+def leaderboard_query_for(track, **kwargs):
+    """Return a query for the leaderboard from the given Track. The leaderboard is simply ordered from slowest stopwatch time to fasted stopwatch time. This function
     will return the query object itself, which can be paginated or received in full.
 
     Arguments
     ---------
-    :track: An instance of Track.
-    :page: The page from which to query the leaderboard entries."""
+    :track: An instance of Track."""
     try:
         # Employ a query_expression / with_expression option on this query, to fill in the place in the leaderboard for each race outcome.
         # We will only include races that are confirmed finished in this query.
@@ -57,14 +67,13 @@ def page_leaderboard_for(track, page, **kwargs):
         raise e
 
 
-def page_comments_for(track, page, **kwargs):
-    """Return a query for the desired page of the given Track's comments section. The resulting query will be ordered by the newest comments to the oldest comments
+def comments_query_for(track, **kwargs):
+    """Return a query for the the comments of the given Track. The resulting query will be ordered by the newest comments to the oldest comments
     unless specified otherwise in keyword arguments.
 
     Arguments
     ---------
-    :track: An instance of Track.
-    :page: The page from which to query the comments."""
+    :track: An instance of Track."""
     try:
         # Create a new query for the track comment model, that will filter for the given track, order the results by created in a descending fashion.
         comments_q = db.session.query(models.TrackComment)\
@@ -74,6 +83,40 @@ def page_comments_for(track, page, **kwargs):
     except Exception as e:
         raise e
 
+
+class RequestComment():
+    """A container for a loaded request for a track comment."""
+    def __init__(self, **kwargs):
+        self.text = kwargs.get("text")
+
+
+class RequestCommentSchema(Schema):
+    """A schema for loading a request for a track comment."""
+    class Meta:
+        unknown = EXCLUDE
+    text                    = fields.Str(required = True, allow_none = False)
+
+    @post_load
+    def request_comment_post_load(self, data, **kwargs) -> RequestComment:
+        return RequestComment(**data)
+    
+
+class RequestRating():
+    """A container for a loaded request to rate a track."""
+    def __init__(self, **kwargs):
+        self.rating = kwargs.get("rating")
+
+
+class RequestRatingSchema(Schema):
+    """A schema for loading a request to rate a track."""
+    class Meta:
+        unknown = EXCLUDE
+    rating              = fields.Bool(required = True, allow_none = False)
+
+    @post_load
+    def request_rating_post_load(self, data, **kwargs) -> RequestRating:
+        return RequestRating(**data)
+    
 
 class RatingsSchema(Schema):
     """A schema for dumping a track's ratings."""
@@ -109,6 +152,27 @@ def get_ratings_for(track, **kwargs) -> Ratings:
         raise e
     
 
+def has_user_finished(track, user, **kwargs) -> bool:
+    """"""
+    try:
+        """TODO: perform query that searches for all track user race that refers to this User, and that is finished. Return True if length is >0"""
+        return False
+    except Exception as e:
+        raise e
+    
+    
+def get_track_comment(track, comment_uid, **kwargs) -> models.TrackComment:
+    """"""
+    try:
+        return db.session.query(models.TrackComment)\
+            .join(models.Track, models.Track.id == models.TrackComment.track_id)\
+            .filter(models.Track.id == track.id)\
+            .filter(models.TrackComment.uid == comment_uid)\
+            .first()
+    except Exception as e:
+        raise e
+    
+
 def get_user_rating(track, user, **kwargs) -> bool:
     """Get the given User's rating created toward the given Track. This will return True if they have upvoted the Track, False if downvoted or None if
     they have not yet voted for the Track."""
@@ -119,15 +183,85 @@ def get_user_rating(track, user, **kwargs) -> bool:
             .scalar()
     except Exception as e:
         raise e
+
+
+def set_user_rating(track, user, request_rating, **kwargs):
+    """Set the rating by the given User to the value(s) provided by the request. This will be done by simply upserting a track rating record, so any
+    existing rating will be reused, or created if doesn't exist.
+    
+    Arguments
+    ---------
+    :track: The Track to rate.
+    :user: The User rating the Track.
+    :request_rating: An instance of RequestRating, containing the target values."""
+    try:
+        # Create an expression to insert a new instance of TrackRating for this track and user.
+        insert_track_rating_stmt = (
+            insert(models.TrackRating.__table__)
+                .values(track_id = track.id, user_id = user.id, rating = request_rating.rating)
+                .on_conflict_do_update(
+                    index_elements = ["track_id", "user_id"],
+                    set_ = dict(rating = request_rating.rating)))
+        # Execute this statement.
+        db.session.execute(insert_track_rating_stmt)
+    except Exception as e:
+        raise e
     
 
-def find_existing_track(**kwargs):
-    """"""
+def clear_user_rating(track, user, **kwargs):
+    """Clear the given Track of any ratings by the given User. We'll do this by running a delete expression.
+    
+    Arguments
+    ---------
+    :track: The Track for which to clear ratings.
+    :user: The User for which ratings toward the Track must be cleared."""
+    try:
+        # Simply perform a delete query for this track and user combination.
+        track_rating_tbl = models.TrackRating.__table__
+        delete_track_rating_stmt = (
+            delete(track_rating_tbl)
+                .where(track_rating_tbl.c.track_id == track.id)
+                .where(track_rating_tbl.c.user_id == user.id))
+        # Execute this statement.
+        db.session.execute(delete_track_rating_stmt)
+    except Exception as e:
+        raise e
+    
+
+def find_existing_track(**kwargs) -> models.Track:
+    """Locate and return an existing Track identified by a number of possible values. This function may also be used to validate intent to utilise
+    the discovered track for various end purposes, which can centralise errors relating to that.
+    
+    Keyword arguments
+    -----------------
+    :track_hash: The Track hash to locate the track by.
+    :track_uid: The Track uid to locate the track by.
+    :validate_can_race: Pass True to validate the resulting for capability for racing. Default is False."""
     try:
         track_hash = kwargs.get("track_hash", None)
+        track_uid = kwargs.get("track_uid", None)
+        validate_can_race = kwargs.get("validate_can_race", False)
 
-        """TODO: improve this function."""
-        return models.Track.find(track_hash = track_hash)
+        existing_track_q = db.session.query(models.Track)
+        # Attach track hash.
+        if track_hash:
+            existing_track_q = existing_track_q\
+                .filter(models.Track.track_hash == track_hash)
+        # Attach track uid.
+        if track_uid:
+            existing_track_q = existing_track_q\
+                .filter(models.Track.uid == track_uid)
+        # Locate the track.
+        track = existing_track_q.first()
+        # If validate for racing is True and track is None, raise a NoTrackFound.
+        if validate_can_race and not track:
+            raise NoTrackFound()
+        elif validate_can_race:
+            # Otherwise, just validate the race to ensure any User can race it.
+            if not track.can_be_raced:
+                raise TrackCantBeRaced()
+        # Otherwise, just return track.
+        return track
     except Exception as e:
         raise e
     
