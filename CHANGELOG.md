@@ -24,3 +24,10 @@
 * Added top leaderboard entries to track viewmodel w/ test case,
 * Added User API and module,
 * Improved race cancellation and race participation updates.
+
+## Version 0.00.04
+* Added track type,
+* Added vehicle used to leaderboard entries,
+* Fixed pagination attempting to paginate with str instead of int,
+* Added template private settings,
+* Updated README.

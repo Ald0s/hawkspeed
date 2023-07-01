@@ -366,6 +366,12 @@ class TrackUserRace(db.Model, LineStringGeometryMixin):
         return self.disqualified
 
     @property
+    def vehicle_used(self):
+        """Returns the vehicle used by this Player to complete the race."""
+        """TODO: complete this. For now, it will just return NO VEHICLE."""
+        return "NO VEHICLE"
+    
+    @property
     def is_cancelled(self):
         """Returns True if the race has been cancelled."""
         return self.cancelled
@@ -542,17 +548,21 @@ class Track(db.Model, PointGeometryMixin):
     relationship with the track path represents the actual track. This model is on a dynamic load strategy for query speed reasons."""
     __tablename__ = "track"
 
+    # Track types here.
+    TYPE_SPRINT = 0
+    TYPE_CIRCUIT = 1
+
     id: Mapped[int] = mapped_column(primary_key = True)
     user_id: Mapped[int] = mapped_column(ForeignKey("user_.id", ondelete = "CASCADE"), nullable = True)
 
     # A hash of this track, this is used to uniquely identify this track. This can't be None.
     track_hash: Mapped[str] = mapped_column(String(256), nullable = False, unique = True)
-    # Images for this track.
-    """TODO: images for the track here."""
     # The track's name, can't be None.
     name: Mapped[str] = mapped_column(String(64), nullable = False)
     # The track's description, can't be None.
     description: Mapped[str] = mapped_column(String(256), nullable = False)
+    # The track's type. Can't be None.
+    track_type: Mapped[int] = mapped_column(nullable = False)
     # Whether this track has been verified. Default is False, can't be None.
     verified: Mapped[bool] = mapped_column(nullable = False, default = False)
 
@@ -629,6 +639,10 @@ class Track(db.Model, PointGeometryMixin):
     def set_description(self, description):
         """Set this track's description."""
         self.description = description
+
+    def set_track_type(self, track_type):
+        """Set this track's type."""
+        self.track_type = track_type
 
     def set_verified(self, verified):
         """Set whether this track is verified."""

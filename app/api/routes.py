@@ -322,7 +322,7 @@ def page_track_leaderboard(track, **kwargs):
     return a page object containing the Track, ordered finished race outcomes, the current page number and the next page number (or None if there are no more.)"""
     try:
         # Get the page argument. By default, page one.
-        page = request.args.get("p", 1)
+        page = int(request.args.get("p", 1))
         # With the track and the requested page, create a new track view model and get back a SerialisablePagination object from the view model.
         track_view_model = viewmodel.TrackViewModel(current_user, track)
         leaderboard_sp = track_view_model.page_leaderboard(page)
@@ -341,7 +341,7 @@ def page_track_comments(track, **kwargs):
     return a page object containing the Track, the requested page of comments, the current page number and the next page number (or None if there are no more.)"""
     try:
         # Get the page argument. By default, page one.
-        page = request.args.get("p", 1)
+        page = int(request.args.get("p", 1))
         # With the track and the requested page, create a new track view model and get back a SerialisablePagination object from the view model.
         track_view_model = viewmodel.TrackViewModel(current_user, track)
         comments_sp = track_view_model.page_comments(page)

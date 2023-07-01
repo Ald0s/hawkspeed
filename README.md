@@ -9,21 +9,41 @@ This project is still in a very early stage. A realtime, real-world mobile app t
 
 ### Login / Registration
 
-Each Player requires an account, identified by an email address and authenticated by a password. Each account, for completion, requires a username to be chosen and set. After logging in, a Google Maps view is used to display all race tracks within the device's view. In the background, consistent location updates are taken and sent, via socket, to the server.
+Each Player requires an account, identified by an email address and authenticated by a password. Once created, accounts could be required to verify their email. Then, they are able to set their profile up; that is, give themselves a friendly username, and a hint on the vehicle they will use.
+
+<p align="center">
+    <img width="300px" src="https://user-images.githubusercontent.com/13589397/250266174-7c426502-6266-4425-a646-2537bdf7b5cf.png">
+    <img width="300px" src="https://user-images.githubusercontent.com/13589397/250266242-b13a1aee-3fde-4bb8-a6c2-2b068213038d.png">
+</p>
+
+After logging in, a stateful connection utilising socket IO is launched in the background. This is where the player officially 'joins' the game. This status will last until that stateful connection is broken. Once joined, the player's device will send rapid location updates to the server, receiving in response an approval for their latest reported location, and a list of world objects in proximity to the approved location. Note that HawkSpeed does not utilise the device's reported location prior to server approval.
+
+### World Map
+
+Alongside receiving world objects via proximity, the Player may also move their viewport, which in itself will trigger requests to collect world objects within those bounds. Below, the map has three race track markers reported. The tracks themselves are not visible because the device has not yet fetched (and therefore cached) those tracks at least once. Tapping a track marker will download the track's path (note it has appeared in the background of preview image), and display a small preview dialog.
+
+<p align="center">
+    <img width="300px" src="https://user-images.githubusercontent.com/13589397/250266251-24aa8f0d-7e2e-4c7f-8544-8e3110e2cd73.png">
+    <img width="300px" src="https://user-images.githubusercontent.com/13589397/250266245-75374088-8118-49fe-9eaf-9517966c4397.png">
+</p>
+
+Tapping the 'About' section of this preview will show that track, in detail. This interface allows players to view the track's full leaderboard, leave comments and either a like or dislike rating. 
+
+<p align="center">
+    <img width="300px" src="https://user-images.githubusercontent.com/13589397/250266244-c961a59f-d2c2-4f6e-b04c-5ca9b9d0ada3.png">
+</p>
 
 ### World / Racing
 
-If a Player moves within acceptable distance to a track's start point, the opportunity to race the track will be offered to the player. Once accepted, this intent will be communicated to the server at the same time the start is counted down. From the time the race starts, until the server determines either a finish, cancelled or disqualified outcome, time is recorded from each update sent. Once the race has an outcome, it is saved and can be viewed within the leaderboard by accessing the Race's details interface.
+If a Player moves within acceptable distance to a track's start point, the opportunity to race the track will be offered to the player. Once accepted, this intent will become a request for a new race, which will be sent as soon as the countdown is complete. From the time the race starts, until the server determines a finish, cancelled or disqualified outcome, time is recorded from each update sent and calculations are performed to ensure the player does not drastically deviate from the course. Once the race has an outcome, it is saved and can be viewed from the track's leaderboard.
 
 ### Recording
 
-A race track may be recorded (right now) anywhere, as long as the Player has permission to do so (granted by the server) and the track location lands within area of use for EPSG 3112. They may select a location and start the recorder interface. At which point, the track may be driven at any pace. The points recorded are submitted to the server, which validates and normalises the track. This is then added as a verified race track to the world and is able to be raced.
+A race track may be recorded (right now) anywhere, as long as the Player has permission to do so (granted by the server) and the track location lands within area of use for EPSG 3112 (Australia). From the world map, players can start the recorder interface. Once recording is started, a track may be driven at any pace. The points recorded are submitted to the server, which validates and normalises the track. Finally, the track is set as verified, and players can find and race it.
 
 ## Server
 
-This project represents the backend server portion of the system. It is built on the Flask Microframework, supported by a PostgreSQL database through the SQLAlchemy ORM. PostgreSQL is used alongside the PostGIS extension (made available via Geoalchemy.)
-
-Authentication, creation of tracks and the querying of a track's details is done via a REST API. The server also uses Flask-SocketIO to simultaneously run a stream based connection system such that the actual racing and player updates are handled in realtime.
+This project represents the backend server portion of the system. It is built on Flask Microframework, supported by a PostgreSQL database through SQLAlchemy ORM. PostgreSQL is used alongside the PostGIS extension (made available via Geoalchemy.) Alternatively, you can use SQLite w/ Spatialite for tests and development, though it's annoying to get spatialite so I'd recommend stick with Post.
 
 ## Installation
 ```
@@ -36,16 +56,17 @@ $ sudo apt install libsqlite3-mod-spatialite
 # Install packages (I use pipenv.)
 $ pipenv install
 
-# Make an instance directory in root, and within that a private settings file.
+# Make an instance directory in root, then copy the private settings template from config/
 $ mkdir instance
-$ touch settings.py
+$ cp app/config/privatesettings.py instance/settings.py
+$ cd instance/
 
-# Within your private settings, create classes referred to by public app/config/settings
+# Make sure to complete all TODO comments in private settings!
 
-# Run tests.
+# Run tests. This will not work properly if you do not have Spatialite.
 $ ./test.sh
 
-# Run development server.
+# Run development server. This will not work properly if you do not have Spatialite.
 $ ./run.sh
 
 # Production:

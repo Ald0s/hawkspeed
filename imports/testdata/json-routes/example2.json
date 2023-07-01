@@ -1,6 +1,7 @@
 {
     "name": "Example2",
     "description": "Example 2",
+    "track_type": 0,
     "segments": [
         {
             "points": [

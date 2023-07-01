@@ -318,6 +318,8 @@ class LeaderboardEntryViewModel(BaseViewModel):
         finished            = fields.Int(required = True, allow_none = False)
         # The total recorded time, in milliseconds, for this race. Can't be None.
         stopwatch           = fields.Int(required = True, allow_none = False)
+        # The vehicle this Player used to complete the race. Can't be None.
+        vehicle_used        = fields.Str(required = True, allow_none = False)
         # The Player that completed this race. Can't be None.
         player              = SerialiseViewModelField(required = True, allow_none = False)
         # The UID for the Track that was raced on. Can't be None.
@@ -348,6 +350,11 @@ class LeaderboardEntryViewModel(BaseViewModel):
         """The duration of this race, in milliseconds."""
         return self.patient.stopwatch
 
+    @property
+    def vehicle_used(self):
+        """Returns the vehicle used by this Player to complete the race."""
+        return self.patient.vehicle_used
+    
     @property
     def player(self):
         """A view model for the Player who raced."""
@@ -515,6 +522,8 @@ class TrackViewModel(BaseViewModel):
         start_point         = fields.Nested(tracks.TrackPointSchema, many = False, required = True, allow_none = False)
         # Is this track verified? Can't be None.
         is_verified         = fields.Bool(required = True, allow_none = False)
+        # What type if this track? Can't be None.
+        track_type          = fields.Int(required = True, allow_none = False)
         # This track's ratings. Can't be None.
         ratings             = fields.Nested(tracks.RatingsSchema, many = False, allow_none = False)
         # The actor's disposition toward the Track, can be None; which means the actor has not voted.
@@ -582,6 +591,11 @@ class TrackViewModel(BaseViewModel):
     def is_verified(self):
         """Return True if this track is verified."""
         return self.patient.is_verified
+
+    @property
+    def track_type(self):
+        """Returns the type of this track."""
+        return self.patient.track_type
     
     @property
     def ratings(self):

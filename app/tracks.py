@@ -357,6 +357,7 @@ class LoadedTrack():
     def __init__(self, **kwargs):
         self.name = kwargs.get("name")
         self.description = kwargs.get("description")
+        self.track_type = kwargs.get("track_type")
         self.segments = kwargs.get("segments")
         # We will now produce a track identity hash. The identity hash will be the track's name, and the coordinates from the very first point.
         hash_contents = (self.name + str(self.segments[0].points[0].latitude) + str(self.segments[0].points[0].longitude)).encode("utf-8")
@@ -391,6 +392,7 @@ class LoadTrackSchema(Schema):
     """A schema for loading a basic track; without User data."""
     name                    = fields.Str()
     description             = fields.Str()
+    track_type              = fields.Int()
     segments                = fields.List(fields.Nested(LoadTrackSegmentSchema, many = False))
 
     @post_load
@@ -402,6 +404,7 @@ class LoadUserTrackSchema(Schema):
     """A schema for loading a User track schema, with User data attached to it."""
     name                    = fields.Str()
     description             = fields.Str()
+    track_type              = fields.Int()
     segments                = fields.List(fields.Nested(LoadUserTrackSegmentSchema, many = False))
 
     @post_load
@@ -546,9 +549,11 @@ def create_track_from_gpx(filename, **kwargs) -> CreatedTrack:
             gpx_file_contents = f.read()
             gpx = gpxpy.parse(gpx_file_contents)
         # Now, load the actual schema. We'll do this first by reading all GPX data and creating JSON compatible objects from it all.
+        """TODO: use an actual track type here, figure out how to set it in GPX files."""
         new_track_json = {
             "name": gpx.tracks[0].name,
             "description": gpx.tracks[0].description,
+            "track_type": 0,
             "segments": [dict(points = [{
                     "latitude": track_point.latitude,
                     "longitude": track_point.longitude
@@ -604,6 +609,7 @@ def create_track(loaded_track, **kwargs) -> CreatedTrack:
         # Set all basic details on the track.
         new_track.set_name(loaded_track.name)
         new_track.set_description(loaded_track.description)
+        new_track.set_track_type(loaded_track.track_type)
         new_track.set_verified(is_verified)
         new_track.set_path(track_path)
         # We will use the very first point from the very first segment to represent the start point. So set this as the position on the Track.
