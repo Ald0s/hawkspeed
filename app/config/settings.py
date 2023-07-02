@@ -26,6 +26,8 @@ class GeospatialConfigurationMixin():
     WORLD_CONFIGURATION_CRS = 3112
     # The number of player updates to retain per User.
     NUM_PLAYER_UPDATES_RETAIN = 100
+    # Radius in meters around a Player from which world objects will be collected.
+    NUM_METERS_PLAYER_PROXIMITY = 150
 
 
 class BaseConfig(private.PrivateBaseConfig, RaceConfigurationMixin, GeospatialConfigurationMixin, SocketConfig):
@@ -44,8 +46,8 @@ class BaseConfig(private.PrivateBaseConfig, RaceConfigurationMixin, GeospatialCo
     #SERVER_NAME = f"127.0.0.1:{PORT}"
     SERVER_URL = "http://192.168.0.253:5000"
 
-    SERVER_VERSION_TEXT = "0.00.04"
-    SERVER_VERSION_CODE = 4
+    SERVER_VERSION_TEXT = "0.00.05"
+    SERVER_VERSION_CODE = 5
 
     # Streaming configuration.
     MAX_CONTENT_LENGTH = 16 * 1024 * 1024 # 16 MB
@@ -104,12 +106,15 @@ class TestConfig(private.PrivateTestConfig, BaseConfig):
     USERDATA_PATH = os.path.join("userdata", "test")
     # Some directories.
     GPX_ROUTES_DIR = os.path.join(IMPORTS_PATH, "gpx-routes")
+    TESTDATA_GPX_ROUTES_DIR = os.path.join(IMPORTS_PATH, "gpx-routes", "test-routes")
 
     # Good middle ground.
     GLOBAL_REPORTING_TIMEZONE = "Etc/GMT"
 
     SQLALCHEMY_DATABASE_URI = "sqlite:///:memory:"
 
+    NUM_METERS_PLAYER_PROXIMITY = 150
+    
     NUM_PLAYER_UPDATES_RETAIN = 5
     PAGE_SIZE_LEADERBOARD = 5
 
@@ -132,6 +137,7 @@ class DevelopmentConfig(private.PrivateDevelopmentConfig, BaseConfig):
     USERDATA_PATH = os.path.join("userdata", "test")
     # Some directories.
     GPX_ROUTES_DIR = os.path.join(IMPORTS_PATH, "gpx-routes")
+    TESTDATA_GPX_ROUTES_DIR = os.path.join(IMPORTS_PATH, "gpx-routes", "test-routes")
 
     NUM_PLAYER_UPDATES_RETAIN = 5
     PAGE_SIZE_LEADERBOARD = 5

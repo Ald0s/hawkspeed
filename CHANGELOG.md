@@ -31,3 +31,10 @@
 * Fixed pagination attempting to paginate with str instead of int,
 * Added template private settings,
 * Updated README.
+
+## Version 0.00.05
+* Added UserVehicle model to represent vehicles used in racing, also added vehicles to tests and merged with setup flow,
+* Added the vehicle view model and basic API for querying current User's vehicles; with test,
+* Fixed lots of broken tests,
+* Implemented collect_nearby_objects and test,
+* Started writing tests for socket,

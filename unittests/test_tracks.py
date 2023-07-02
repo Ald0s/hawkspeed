@@ -14,7 +14,7 @@ class TestTracks(BaseCase):
     def test_loading_tracks(self):
         # Create a new User.
         aldos = factory.create_user("alden@mail.com", "password",
-            username = "alden")
+            username = "alden", vehicle = "1994 Toyota Supra")
         db.session.flush()
         # Test that we can load a track from GPX.
         track_from_gpx = tracks.create_track_from_gpx("example1.gpx",
@@ -38,7 +38,7 @@ class TestTracks(BaseCase):
         Ensure this attempt fails with TrackInspectionFailed."""
         # Create a new User.
         aldos = factory.create_user("alden@mail.com", "password",
-            username = "alden")
+            username = "alden", vehicle = "1994 Toyota Supra")
         db.session.flush()
         # Load the yarra boulevard test track.
         created_track = tracks.create_track_from_gpx("yarra_boulevard.gpx")
@@ -62,9 +62,9 @@ class TestTracks(BaseCase):
         Expect the same for the next two being second and third place."""
         # Create two new Users.
         aldos = factory.create_user("alden@mail.com", "password",
-            username = "alden")
+            username = "alden", vehicle = "1994 Toyota Supra")
         emily = factory.create_user("emily@mail.com", "password",
-            username = "emily")
+            username = "emily", vehicle = "1994 Toyota Supra")
         # Create a track.
         created_track = tracks.create_track_from_gpx("yarra_boulevard.gpx")
         created_track.set_owner(aldos)
@@ -73,10 +73,16 @@ class TestTracks(BaseCase):
         # Now, for User1, step through the entire race yarra_boulevard_good_race_1.
         race_first = self.simulate_entire_race(aldos, track, os.path.join(os.getcwd(), config.IMPORTS_PATH, "races", "yarra_boulevard_good_race_1.gpx"))
         db.session.flush()
+        # Refresh aldos.
+        db.session.refresh(aldos)
+        # Ensure aldos does not have an ongoing track.
+        self.assertIsNone(aldos.ongoing_race)
         # Now for User2, step through the same race, but at 500 ms slower.
         race_second = self.simulate_entire_race(emily, track, os.path.join(os.getcwd(), config.IMPORTS_PATH, "races", "yarra_boulevard_good_race_1.gpx"),
             ms_adjustment = 500)
         db.session.flush()
+        # Ensure aldos does not have an ongoing track.
+        self.assertIsNone(aldos.ongoing_race)
         # Now for User1 again, step through the same race, but at 1000ms slower.
         race_third = self.simulate_entire_race(aldos, track, os.path.join(os.getcwd(), config.IMPORTS_PATH, "races", "yarra_boulevard_good_race_1.gpx"),
             ms_adjustment = 1000)
@@ -84,7 +90,7 @@ class TestTracks(BaseCase):
         # Check there are 3 races logged in the database.
         self.assertEqual(db.session.query(models.TrackUserRace).count(), 3)
         # Get the entire leaderboard for the track.
-        leaderboard = tracks.page_leaderboard_for(track, 1).all()
+        leaderboard = tracks.leaderboard_query_for(track).all()
         # Ensure race first is place #1, and is at the top of the leaderboard.
         self.assertEqual(leaderboard[0].uid, race_first.uid)
         self.assertEqual(leaderboard[0].finishing_place, 1)
@@ -106,7 +112,7 @@ class TestTracks(BaseCase):
         Call get_user_vote with aldos. Ensure None is returned."""
         # Create a new User.
         aldos = factory.create_user("alden@mail.com", "password",
-            username = "alden")
+            username = "alden", vehicle = "1994 Toyota Supra")
         # Create 10 more random Users.
         random_users = [factory.get_random_user() for x in range(10)]
         db.session.flush()

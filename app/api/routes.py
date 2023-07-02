@@ -155,7 +155,23 @@ def get_user(user, **kwargs):
     except Exception as e:
         raise e
     
+
+@api.route("/api/v1/vehicles", methods = [ "GET" ])
+@decorators.account_setup_required()
+def get_our_vehicles(**kwargs):
+    """Perform a request for the current User's list of Vehicles. This function will return an object containing a list of serialised vehicle
+    view models if successful. This is not a pagination route."""
+    try:
+        # Build an Account view model for the current User.
+        account_view_model = viewmodel.AccountViewModel(current_user)
+        # Get a view model list for the Vehicles on this account.
+        vehicles_vml = account_view_model.vehicles
+        # Now, return a successful response with just the list of vehicles.
+        return vehicles_vml.as_dict(), 200
+    except Exception as e:
+        raise e
     
+
 @api.route("/api/v1/track/<track_uid>", methods = [ "GET" ])
 @decorators.account_setup_required()
 @decorators.get_track(should_belong_to_user = False)

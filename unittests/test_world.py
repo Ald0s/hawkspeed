@@ -16,14 +16,17 @@ class TestWorld(BaseCase):
     def test_dont_trim_player_location_attached_race(self):
         # Create a new User.
         aldos = factory.create_user("alden@mail.com", "password",
-            username = "alden")
+            username = "alden", vehicle = "1994 Toyota Supra")
+        db.session.flush()
+        vehicle = aldos.vehicles.first()
         # Create a track.
-        track = tracks.create_track_from_gpx("example1.gpx")
+        track = self.create_track_from_gpx(aldos, "example1.gpx")
         db.session.flush()
         # Start a new race for this User and this track.
         # Create a new track user race for between this user and track.
-        race = models.TrackUserRace(
-                user = aldos, track = track, started = 1678508089000)
+        race = models.TrackUserRace(started = 1678508089000)
+        race.set_track_and_user(track, aldos)
+        race.set_vehicle(vehicle)
         # Set the CRS for this geometry.
         race.set_crs(config.WORLD_CONFIGURATION_CRS)
         db.session.add(race)
@@ -65,7 +68,7 @@ class TestWorld(BaseCase):
     def test_trim_player_location_history(self):
         # Create a new User.
         aldos = factory.create_user("alden@mail.com", "password",
-            username = "alden")
+            username = "alden", vehicle = "1994 Toyota Supra")
         def add_user_locations():
             # Add 6 user locations to the User's history.
             for x in range(6):
@@ -92,10 +95,10 @@ class TestWorld(BaseCase):
         # Get the oldest user location.
         oldest_location = aldos.location_history.order_by(asc(models.UserLocation.logged_at)).first()
 
-    def test_collect_world_objects(self):
+    def test_collect_viewed_world_objects(self):
         # Create a new User.
         aldos = factory.create_user("alden@mail.com", "password",
-            username = "alden")
+            username = "alden", vehicle = "1994 Toyota Supra")
         # Create a new track from example1.
         tracks.create_track_from_gpx("example1.gpx")
         db.session.flush()
@@ -122,13 +125,35 @@ class TestWorld(BaseCase):
         # Ensure there are 0 tracks in this view object.
         self.assertEqual(len(world_view_2.tracks), 0)
 
+    def test_collect_nearby_world_objects(self):
+        # Create a new User.
+        aldos = factory.create_user("alden@mail.com", "password",
+            username = "alden", vehicle = "1994 Toyota Supra")
+        # Create a new track from example1.
+        example1 = self.create_track_from_gpx(aldos, "example1.gpx")
+        db.session.flush()
+        # Prepare two locations; one in which the example track is within proximity, and the other where it is not.
+        prepared_user_locations = [
+            world.prepare_user_location(dict(latitude = -37.843746, longitude = 145.030509, logged_at = 1678508080000, speed = 70.0, rotation = 180.0)),
+            world.prepare_user_location(dict(latitude = -37.843928, longitude = 145.032065, logged_at = 1678508080000+1000, speed = 70.0, rotation = 180.0))
+        ]
+        # Now, collect nearby world objects for the first User location.
+        nearby_world_objects = world.collect_nearby_objects(aldos, prepared_user_locations[0])
+        # Ensure there's 1 track, ensure that track is example1.
+        self.assertEqual(len(nearby_world_objects.tracks), 1)
+        self.assertEqual(nearby_world_objects.tracks[0].uid, example1.uid)
+        # Now, collect nearby world objects for the second User location.
+        nearby_world_objects = world.collect_nearby_objects(aldos, prepared_user_locations[1])
+        # Ensure there's 0 tracks.
+        self.assertEqual(len(nearby_world_objects.tracks), 0)
+
     def test_serialise_viewport_response(self):
         """"""
         # Create a new User.
         aldos = factory.create_user("alden@mail.com", "password",
-            username = "alden")
+            username = "alden", vehicle = "1994 Toyota Supra")
         # Create a new track from example1.
-        example1 = tracks.create_track_from_gpx("example1.gpx")
+        example1 = self.create_track_from_gpx(aldos, "example1.gpx")
         db.session.flush()
         # Create a new viewport update result, add the track in.
         viewport_update_result = world.ViewportUpdateResult([example1])

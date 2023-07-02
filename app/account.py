@@ -11,7 +11,7 @@ from email_validator import validate_email, EmailNotValidError
 from password_strength import PasswordPolicy
 from marshmallow import Schema, fields, EXCLUDE, post_load, ValidationError, validates, pre_load
 
-from . import db, config, models, factory, decorators, error
+from . import db, config, models, users, decorators, error
 
 LOG = logging.getLogger("hawkspeed.account")
 LOG.setLevel( logging.DEBUG )
@@ -184,7 +184,7 @@ class RequestSetupProfile():
         #profile_image
         self.username = kwargs.get("username")
         self.bio = kwargs.get("bio")
-        self.vehicle_information = kwargs.get("vehicle_information")
+        self.vehicle = kwargs.get("vehicle")
 
 
 class RequestSetupProfileSchema(Schema):
@@ -193,9 +193,9 @@ class RequestSetupProfileSchema(Schema):
     class Meta:
         unknown = EXCLUDE
     #profile_image           = media.MediaField(allow_none = True)
-    username                = fields.Str(allow_none = False)
+    username                = fields.Str(required = True, allow_none = False)
     bio                     = fields.Str(load_default = "", allow_none = True)
-    vehicle_information     = fields.Str(allow_none = False)
+    vehicle                 = fields.Nested(users.RequestCreateVehicleSchema, many = False, required = True, allow_none = False)
 
     @validates("username")
     def validate_username(self, value):
@@ -239,10 +239,18 @@ class RequestSetupProfileSchema(Schema):
             LOG.error(f"Failed to setup social account, bio was too long!")
             raise ValidationError("bio-too-long")
 
-    @validates("vehicle_information")
-    def validate_vehicle_information(self, value):
-        """Validate the User's vehicle information."""
-        pass
+    @validates("vehicle")
+    def validate_vehicle(self, value):
+        """Validate the User's vehicle information. Vehicle information is required and can be no longer than 64
+        characters in length.
+        
+        Raises
+        ------
+        ValidationError
+        :vehicle-too-long: The Vehicle's text is longer than 64 characters."""
+        if value.text and len(value.text) > 64:
+            LOG.error(f"Failed to setup social account, vehicle information was too long!")
+            raise ValidationError("vehicle-too-long")
     
     @post_load
     def request_setup_profile_post_load(self, data, **kwargs) -> RequestSetupProfile:
@@ -269,7 +277,8 @@ def login_local_account(request_login_local, **kwargs) -> models.User:
     The User."""
     try:
         # Now, search for a User that owns this email address.
-        target_user = models.User.search( email_address = request_login_local.email_address )
+        target_user = models.User.search(
+            email_address = request_login_local.email_address)
         if not target_user:
             LOG.error(f"Failed to login local account; no User for email; {request_login_local.email_address}")
             raise error.UnauthorisedRequestFail("incorrect-login")
@@ -283,7 +292,8 @@ def login_local_account(request_login_local, **kwargs) -> models.User:
             # Raise a critical error that will log the User out of their account on the client.
             raise error.AccountSessionIssueFail("disabled")
         # We can now log the User in.
-        if not login_user(target_user, remember = request_login_local.remember_me):
+        if not login_user(target_user,
+            remember = request_login_local.remember_me):
             LOG.error(f"Failed to login local account {target_user}; login_user returned False!.")
             raise error.OperationalFail("unknown")
         """
@@ -387,7 +397,8 @@ def create_local_account(request_local_account, **kwargs) -> models.User:
         if verification_required:
             # Flush to grab the user a UID.
             db.session.flush()
-            user_verify = require_verification(new_user, "new-account", expires = config.TIME_UNTIL_NEW_ACCOUNT_EXPIRES)
+            user_verify = require_verification(new_user, "new-account",
+                expires = config.TIME_UNTIL_NEW_ACCOUNT_EXPIRES)
         return new_user
     except Exception as e:
         raise e
@@ -404,7 +415,8 @@ def check_name_taken(username, **kwargs) -> bool:
     -------
     True if the name is taken, False otherwise."""
     try:
-        existing_user = models.User.search(username = username)
+        existing_user = models.User.search(
+            username = username)
         if existing_user:
             return True
         return False
@@ -448,7 +460,9 @@ def setup_account_profile(user, request_setup_profile, **kwargs) -> models.User:
         user.set_username(request_setup_profile.username)
         # Set the user's bio.
         user.set_bio(request_setup_profile.bio)
-        """TODO: vehicle information."""
+        # Create a vehicle for the User.
+        users.create_vehicle(request_setup_profile.vehicle,
+            user = user)
         # Set profile setup.
         user.set_profile_setup(True)
         return user

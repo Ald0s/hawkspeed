@@ -125,6 +125,8 @@ class BaseCase(TestCase):
         # Create the new instance with started set.
         track_user_race = models.TrackUserRace(
             started = started)
+        # Set vehicle.
+        track_user_race.set_vehicle(user.vehicles.first())
         # Set track and User.
         track_user_race.set_track_and_user(track, user)
         # Add to session and flush to get a new UID.
@@ -140,6 +142,7 @@ class BaseCase(TestCase):
         race = race_simulator.new_race(track)
         db.session.add(race)
         db.session.flush()
+        db.session.expire(user)
 
         request_player_update_schema = world.RequestPlayerUpdateSchema()
         for user_location_d in race_simulator.step(**kwargs):
@@ -147,14 +150,18 @@ class BaseCase(TestCase):
             request_player_update = request_player_update_schema.load(user_location_d)
             player_update_result = world.parse_player_update(user, request_player_update)
             db.session.flush()
+            # If User has ongoing race, update participation.
             if user.has_ongoing_race:
+                # Get the participation result.
                 update_race_participation_result = races.update_race_participation_for(user, player_update_result)
                 db.session.flush()
+                # If disqualified, break from the simulation.
+                if update_race_participation_result.is_disqualified:
+                    break
         # Now, expire User and Race.
         db.session.expire(race)
         db.session.expire(user)
-        # Ensure race is finished, and ensure user has no ongoing race.
-        self.assertEqual(race.is_finished, True)
+        # Ensure user has no ongoing race.
         self.assertEqual(user.has_ongoing_race, False)
         return race
 
@@ -333,7 +340,9 @@ class PlayerRaceGPXSimulator():
 
     def new_race(self, _track):
         # Set the User, the Track and the time at which the race started; the first point in the given GPX.
-        race = models.TrackUserRace(user = self._user, track = _track, started = self._started)
+        race = models.TrackUserRace(started = self._started)
+        race.set_vehicle(self._user.vehicles.first())
+        race.set_track_and_user(_track, self._user)
         race.set_crs(config.WORLD_CONFIGURATION_CRS)
         return race
 

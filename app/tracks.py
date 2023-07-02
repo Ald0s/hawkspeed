@@ -543,7 +543,7 @@ def create_track_from_gpx(filename, **kwargs) -> CreatedTrack:
         # If it does not exist, raise an error.
         if not os.path.isfile(gpx_absolute_path):
             """TODO: proper exception handling please."""
-            raise NotImplementedError("create_track_from_gpx failed because GPX file not found.")
+            raise NotImplementedError(f"create_track_from_gpx failed because GPX file not found. ({gpx_absolute_path})")
         # Read the contents of the file, and load a GPX instance.
         with open(gpx_absolute_path, "r") as f:
             gpx_file_contents = f.read()

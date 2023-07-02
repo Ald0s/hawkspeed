@@ -14,7 +14,7 @@ from datetime import datetime, date
 from sqlalchemy import func
 from marshmallow import fields, Schema, post_load, EXCLUDE
 
-from . import db, config, models, tracks, world, error
+from . import db, config, models, tracks, users, world, error
 
 LOG = logging.getLogger("hawkspeed.races")
 LOG.setLevel( logging.DEBUG )
@@ -34,6 +34,10 @@ class RaceStartError(Exception):
     REASON_NO_TRACK_FOUND = "no-track-found"
     # The track the User wishes to race can't be raced at the moment.
     REASON_TRACK_NOT_READY = "cant-be-raced"
+    # The race could not be started because the User has multiple Vehicles, but did not provide a UID for the one they want to use.
+    REASON_NO_VEHICLE_UID = "no-vehicle-uid"
+    # The race could not be started because the desired Vehicle could not be found.
+    REASON_NO_VEHICLE = "no-vehicle"
     
     def __init__(self, reason_code):
         self.reason_code = reason_code
@@ -41,6 +45,9 @@ class RaceStartError(Exception):
 
 class RaceDisqualifiedError(Exception):
     """An exception to raise that will cause the disqualification of the given race for the given reason."""
+    DQ_CODE_DISCONNECTED = "disconnected"
+    DQ_CODE_MISSED_TRACK = "missed-track"
+    
     def __init__(self, user, track_user_race, **kwargs):
         self.user = user
         self.track_user_race = track_user_race
@@ -57,6 +64,7 @@ class RequestStartRace():
     """A container for a loaded request to start a new race."""
     def __init__(self, **kwargs):
         self.track_uid = kwargs.get("track_uid")
+        self.vehicle_uid = kwargs.get("vehicle_uid")
         self.started_position = kwargs.get("started_position")
         self.countdown_position = kwargs.get("countdown_position")
 
@@ -66,12 +74,14 @@ class RequestStartRaceSchema(Schema):
     the device was when the race was started. The viewport stored should be used to ensure the Player is facing the right way."""
     class Meta:
         unknown = EXCLUDE
-    # The track's UID.
-    track_uid               = fields.Str()
-    # The player update position at the time the countdown finished and the race began.
-    started_position        = fields.Nested(world.RequestPlayerViewportUpdateSchema, many = False)
-    # The player update position at the time the countdown was started.
-    countdown_position      = fields.Nested(world.RequestPlayerUpdateSchema, many = False)
+    # The track's UID. This is required and can't be None.
+    track_uid               = fields.Str(required = True, allow_none = False)
+    # The UID for the Vehicle the User wishes to use. If None given, this means there's only one vehicle available. Use that.
+    vehicle_uid             = fields.Str(required = True, allow_none = True)
+    # The player update position at the time the countdown finished and the race began. This is required and can't be None.
+    started_position        = fields.Nested(world.RequestPlayerUpdateSchema, many = False, required = True, allow_none = False)
+    # The player update position at the time the countdown was started. This is required and can't be None.
+    countdown_position      = fields.Nested(world.RequestPlayerUpdateSchema, many = False, required = True, allow_none = False)
 
     @post_load
     def request_start_race_post_load(self, data, **kwargs) -> RequestStartRace:
@@ -162,9 +172,23 @@ def start_race_for(user, request_start_race, player_update_result, **kwargs) -> 
     -------
     Returns an instance of StartRaceResult."""
     try:
+        # First, attempt to get the indicated Vehicle. If the vehicle's UID is None, check to ensure the User only has one vehicle OR if a vehicle is already selected.
+        # If they have more than one, or no vehicle is selected, raise an exception. Otherwise, if vehicle UID isn't None, find it. If result is None though, fail for sure.
+        if not request_start_race.vehicle_uid:
+            if user.current_vehicle == None and user.num_vehicles > 1:
+                raise RaceStartError(RaceStartError.REASON_NO_VEHICLE_UID)
+            # This is the vehicle to use.
+            vehicle = user.vehicles.first()
+        else:
+            # Otherwise, find it.
+            vehicle = users.find_vehicle_for_user(user, request_start_race.vehicle_uid)
+            if not vehicle:
+                raise RaceStartError(RaceStartError.REASON_NO_VEHICLE)
+        # We will set this Vehicle as the current vehicle.
+        user.set_current_vehicle(vehicle)
         # Locate the desired track, only verified tracks can be used. This can raise NoTrackFound and TrackCantBeRaced.
         track = tracks.find_existing_track(
-            request_start_race.track_uid)
+            track_uid = request_start_race.track_uid)
         # Now, validate the User's position & countdown measurements to search for disqualification cases. This will either silently succeed, or will raise an error.
         _validate_new_race_intent(user, request_start_race, player_update_result)
         # Get the user location for the point logged at race start.
@@ -174,6 +198,7 @@ def start_race_for(user, request_start_race, player_update_result, **kwargs) -> 
         track_user_race = models.TrackUserRace(
             started = user_location.logged_at)
         track_user_race.set_track_and_user(track, user)
+        track_user_race.set_vehicle(vehicle)
         track_user_race.set_crs(config.WORLD_CONFIGURATION_CRS)
         # Add the user location in player update result to the track and return a start race result.
         track_user_race.add_location(user_location)
@@ -234,11 +259,7 @@ class UpdateRaceParticipationResult():
 
     def __init__(self, _track_user_race, **kwargs):
         self._track_user_race = _track_user_race
-    '''
-    def __init__(self, _is_finished, _track_user_race, **kwargs):
-        self._is_finished = _is_finished
-        self._track_user_race = _track_user_race'''
-    
+
     def serialise(self, **kwargs):
         """Serialise the update race participation result to its response. The response will either be RaceFinishedSchema, RaceProgressSchema or RaceDisqualfiedSchema
         depending on the overall outcome."""
@@ -457,7 +478,7 @@ def _verify_race_progress(user, track_user_race, player_update_result, **kwargs)
     except PlayerDodgedTrackError as pdte:
         LOG.warning(f"Disqualifying race {track_user_race}, the Player has dodged too much of the track. ({pdte.percentage_dodged}%)")
         raise RaceDisqualifiedError(user, track_user_race,
-            dq_code = "missed-track")
+            dq_code = RaceDisqualifiedError.DQ_CODE_MISSED_TRACK)
     except Exception as e:
         raise e
 
@@ -524,7 +545,8 @@ def _calculate_validate_progress(track_user_race, latest_user_location, **kwargs
         track_path_linestring = track_path.multi_linestring.geoms[0]
         progress_linestring = track_user_race.linestring
         progress_polygon = progress_linestring\
-            .buffer(config.NUM_METERS_BUFFER_PLAYER_PROGRESS, cap_style = shapely.geometry.CAP_STYLE.square)
+            .buffer(config.NUM_METERS_BUFFER_PLAYER_PROGRESS,
+                cap_style = shapely.geometry.CAP_STYLE.square)
         # Ensure the Player has not driven too far from the track. This will raise an exception.
         _ensure_player_still_racing(track_path_linestring, latest_user_location)
         # Determine, on the basis of the progress polygon & track path, whether the race is now finished.
@@ -604,72 +626,3 @@ def _ensure_player_still_racing(track_path_linestring, latest_user_location):
         pass
     except Exception as e:
         raise e
-    
-
-'''def _calculate_validate_progress(track_path_linestring, progress_polygon, has_finished_race) -> RaceProgressResult:
-    """Determine the symmetric difference between the progress polygon and the track's path linestring. If the return is a Polygon geometry, the Player's progress totally
-    contains the track, and therefore this is synonymous with the race being finished. Otherwise, if the result is a GeometryCollection, the first item in the collection
-    must be the progress polygon, the rest should all be LineString instances.
-
-    A single linestring (when has_finished_race is False) indicates that the Player has not so far missed any components of the track and that the race is ongoing. However,
-    if has_finished_race is False, and there are multiple LineStrings, the race can be disqualified if the Player has already missed too much of the race; in this case, take
-    all LineStrings EXCEPT the one representing remainder of the track. If has_finished_race is True, disqualify the Player if they have missed too much, purely on the basis
-    of a single LineString.
-
-    Arguments
-    ---------
-    :track_path_linestring: The Track's LineString.
-    :progress_points: A Polygon, which is the Player's progress LineString that has been buffered.
-    :has_finished_race: A boolean indicating whether or not we've determined that the Player has finished the race.
-    
-    Returns
-    -------
-    An instance of RaceProgressResult containing the results of calculations performed."""
-    try:
-        # Calculate a symmetric difference between the player's progress and the track path.
-        race_symmetric_difference = progress_polygon.symmetric_difference(track_path_linestring)
-
-        """TODO: we want to ensure that for now only polygons and linestrings can appear in the result, if it is a geometrycollection. We want to track potential requirements for other
-        types to support as time goes on, and as we feed more data."""
-        if isinstance(race_symmetric_difference, shapely.geometry.GeometryCollection):
-            for symdif_geom in race_symmetric_difference.geoms:
-                if not isinstance(symdif_geom, shapely.geometry.Polygon) and not isinstance(symdif_geom, shapely.geometry.LineString):
-                    raise NotImplementedError(f"_calculate_validate_progress failed. We currently only support Polygon and LineStrings in symmetric diff result. But we have found {type(symdif_geom)} is used.")
-
-        if has_finished_race:
-            # We have finished the race. If race_symmetric_difference is a Polygon, this means there is NO track missed.
-            if isinstance(race_symmetric_difference, shapely.geometry.Polygon):
-                missed_track_linestrings = []
-            elif isinstance(race_symmetric_difference, shapely.geometry.GeometryCollection):
-                # This is a GeometryCollection, meaning there were probably fragments missed.
-                missed_track_linestrings = list(race_symmetric_difference.geoms)[1:]
-        else:
-            # Otherwise, race is not yet finished. If race_symmetric_difference is NOT a GeometryCollection, raise an exception.
-            if not isinstance(race_symmetric_difference, shapely.geometry.GeometryCollection):
-                """TODO: handle this edge case."""
-                raise NotImplementedError("When the race is not yet finished, race_symmetric_difference should ALWAYS be a GeometryCollection?")
-            # Check the number of geometries in this collection. If there are two (the Polygon and a LineString,) this means the Player has not skipped any sections.
-            race_symmetric_difference_geoms = list(race_symmetric_difference.geoms)
-            if len(race_symmetric_difference_geoms) == 2:
-                # As long as the first is a Polygon and the second a LineString, there are no sections missed.
-                if not isinstance(race_symmetric_difference_geoms[0], shapely.geometry.Polygon) or not isinstance(race_symmetric_difference_geoms[1], shapely.geometry.LineString):
-                    """TODO: only 2 geoms found in race symmetric difference."""
-                    raise NotImplementedError("Two geometries found in race_symmetric_difference_geoms, when race is not yet finished, and they are not Polygon & LineString respectively.")
-                else:
-                    # Otherwise, no sections missed.
-                    missed_track_linestrings = []
-            elif len(race_symmetric_difference_geoms) > 2:
-                # There are more than two geometries. Get all linestrings after the first geometry (the Polygon) and before the last (LineString, that is the remainder of the track.) These
-                # are missed track sections.
-                missed_track_linestrings = race_symmetric_difference_geoms[1:len(race_symmetric_difference_geoms)-1]
-            else:
-                # Only one geom? This is not supported.
-                raise NotImplementedError("_analyse_race failed. There is a single geom in race symmetric difference.")
-        # Now, the list of missed track linestrings are those we will check against the track overall for disqualification. Sum the lengths of them all.
-        missed_track_lengths_sum = sum([ls.length for ls in missed_track_linestrings])
-        # Check if the Player has missed too much, raise a disqualification error if they have.
-        percentage_track_missed = (missed_track_lengths_sum/track_path_linestring.length) * 100
-        if percentage_track_missed > config.MAX_PERCENT_PATH_MISSED_DISQUALIFY:
-            raise PlayerDodgedTrackError(int(percentage_track_missed))
-    except Exception as e:
-        raise e'''

@@ -297,6 +297,8 @@ class TrackUserRace(db.Model, LineStringGeometryMixin):
     track_id: Mapped[int] = mapped_column(ForeignKey("track.id", ondelete = "CASCADE"), primary_key = True, nullable = False)
     user_id: Mapped[int] = mapped_column(ForeignKey("user_.id", ondelete = "CASCADE"), primary_key = True, nullable = False)
     uid: Mapped[str] = mapped_column(GUID(), primary_key = True, default = lambda: uuid.uuid4().hex.lower())
+    # A foreign key to the user vehicle table. This is the vehicle selected at the start of the race. Can't be None.
+    vehicle_id: Mapped[int] = mapped_column(ForeignKey("user_vehicle.id", ondelete = "CASCADE"), nullable = False)
 
     # A query expression which, at query time, is to be filled with a window function that queries this race's place in the leaderboard. This should only be with'd on
     # races that are finished, that is, finished is True.
@@ -328,6 +330,10 @@ class TrackUserRace(db.Model, LineStringGeometryMixin):
         uselist = True,
         order_by = "asc(UserLocation.logged_at)",
         secondary = "user_location_race")
+    # The Vehicle chosen to race. Can't be None.
+    vehicle: Mapped["UserVehicle"] = relationship(
+        back_populates = "races_",
+        uselist = False)
     # The Track being raced.
     track: Mapped["Track"] = relationship(
         back_populates = "races_",
@@ -391,6 +397,10 @@ class TrackUserRace(db.Model, LineStringGeometryMixin):
         """TODO: If value None, set dq_extra_info_ to None. Else, dump value as JSON string and set dq_extra_info_."""
         raise NotImplementedError()
 
+    def set_vehicle(self, vehicle):
+        """Set this race's vehicle."""
+        self.vehicle = vehicle
+        
     def set_track_and_user(self, track, user):
         """Setting the track and user."""
         self.track = track
@@ -628,6 +638,11 @@ class Track(db.Model, PointGeometryMixin):
         return self.comments_.count()
     
     @property
+    def start_point(self):
+        """Return this track's start point, as a geometry."""
+        return self.point
+    
+    @property
     def path(self):
         """Return the track's path."""
         return self.path_
@@ -806,6 +821,43 @@ class UserLocation(db.Model, PointGeometryMixin):
         return f"UserLocation<{self.user}>"
 
 
+class UserVehicle(db.Model, HasUUIDMixin):
+    """Represents a User's vehicle."""
+    __tablename__ = "user_vehicle"
+
+    id: Mapped[int] = mapped_column(primary_key = True)
+    # The User's ID that owns this vehicle, can't be None.
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_.id", ondelete = "CASCADE"), nullable = False)
+
+    # For now, we will store the vehicle info as just a string, that we don't really bother validating.
+    """TODO: perhaps a better way of storing vehicles?"""
+    text: Mapped[str] = mapped_column(String(64), nullable = False)
+
+    # All races this vehicle has been involved in. This is a dynamic relationship. Unordered.
+    races_: Mapped[TrackUserRace] = relationship(
+        back_populates = "vehicle",
+        uselist = True,
+        lazy = "dynamic",
+        cascade = "all, delete")
+    # The User that owns this Vehicle. Can't be None.
+    user: Mapped["User"] = relationship(
+        back_populates = "vehicles_",
+        foreign_keys = [user_id],
+        uselist = False)
+    
+    def __repr__(self):
+        return f"UserVehicle<{self.title},u={self.user}>"
+    
+    @property
+    def title(self):
+        """Returns a string that can be used as this vehicle's display name."""
+        return self.text
+    
+    def set_text(self, text):
+        """Set this vehicle's text."""
+        self.text = text
+
+
 class User(UserMixin, db.Model, HasUUIDMixin):
     """Represents an individual's account with HawkSpeed."""
     __tablename__ = "user_"
@@ -836,10 +888,20 @@ class User(UserMixin, db.Model, HasUUIDMixin):
     created: Mapped[int] = mapped_column(BigInteger(), nullable = False, default = time.time)
     # The User's privilege, can't be None.
     privilege: Mapped[int] = mapped_column(nullable = False, default = PRIVILEGE_USER)
-    # The request session ID/socket ID associated with SocketIO. When this is not None, the User is connected to the world. Can be None, indicating the User is not playing.
-    socket_id: Mapped[str] = mapped_column(String(32), nullable = True, default = None)
     # The last time a location update was received from this User, as a timestamp in seconds. This will not be nulled in between sessions. Can be None.
     last_location_update: Mapped[int] = mapped_column(BigInteger(), nullable = True, default = None)
+
+    """TODO: Objects that pertain to a single session of connection. Migrate these to a separate Player model that is dependant on the SocketIO connection, and as such is
+    deleted if that connection is lost."""
+    # The request session ID/socket ID associated with SocketIO. When this is not None, the User is connected to the world. Can be None, indicating the User is not playing.
+    socket_id: Mapped[str] = mapped_column(String(32), nullable = True, default = None)
+    # The ID of the vehicle currently in use by this User. Can be None.
+    current_vehicle_id: Mapped[int] = mapped_column(ForeignKey("user_vehicle.id", ondelete = "SET NULL", use_alter = True), nullable = True)
+    # The vehicle currently in use by this User. Can be None.
+    current_vehicle: Mapped[UserVehicle] = relationship(
+        primaryjoin = current_vehicle_id == UserVehicle.id,
+        post_update = True,
+        uselist = False)
 
     # All Track comments posted by this User, as a dynamic relationship. Unordered.
     track_comments_: Mapped[List[TrackComment]] = relationship(
@@ -863,6 +925,13 @@ class User(UserMixin, db.Model, HasUUIDMixin):
         back_populates = "user",
         lazy = "dynamic",
         uselist = True,
+        cascade = "all, delete")
+    # This User's vehicles, as a dynamic relationship. Unordered.
+    vehicles_: Mapped[List[UserVehicle]] = relationship(
+        back_populates = "user",
+        uselist = True,
+        primaryjoin = id == UserVehicle.user_id,
+        lazy = "dynamic",
         cascade = "all, delete")
     # This User's tracks, as a dynamic relationship. Unordered.
     tracks_: Mapped[List[Track]] = relationship(
@@ -906,6 +975,20 @@ class User(UserMixin, db.Model, HasUUIDMixin):
         """Return a query for the User's location history."""
         return self.location_history_
 
+    @property
+    def num_vehicles(self):
+        return self.vehicles.count()
+    
+    @property
+    def vehicles(self):
+        """Return a query for the User's vehicles."""
+        return self.vehicles_
+    
+    @property
+    def all_vehicles(self):
+        """Return a list of all Vehicles belonging to this User."""
+        return self.vehicles.all()
+    
     @property
     def is_profile_setup(self):
         """Returns True if the User's profile is setup."""
@@ -959,6 +1042,10 @@ class User(UserMixin, db.Model, HasUUIDMixin):
         """Clear the User's socket session."""
         self.socket_id = None
 
+    def clear_current_vehicle(self):
+        """Clear the User's current Vehicle."""
+        self.current_vehicle = None
+
     def set_email_address(self, email_address):
         """Set this User's email address."""
         self.email_address = email_address
@@ -971,6 +1058,14 @@ class User(UserMixin, db.Model, HasUUIDMixin):
         """Set this User's bio to the given text."""
         self.bio = bio
 
+    def add_vehicle(self, vehicle):
+        """Add a vehicle to this User's vehicles list."""
+        self.vehicles_.append(vehicle)
+
+    def set_current_vehicle(self, vehicle):
+        """Set this User's current vehicle to the one given."""
+        self.current_vehicle = vehicle
+        
     def update_password(self, new_password):
         """Update this User's password to the given text. This function will call for password verification."""
         raise NotImplementedError("update_password is not implemented correctly; password needs to be verified!")

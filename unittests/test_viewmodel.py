@@ -15,7 +15,7 @@ class TestTrackViewModel(BaseCase):
         """Import an example track; yarraboulevard."""
         # Create a new User.
         aldos = factory.create_user("alden@mail.com", "password",
-            username = "alden")
+            username = "alden", vehicle = "1994 Toyota Supra")
         db.session.flush()
         # Load the yarra boulevard test track.
         track = self.create_track_from_gpx(aldos, "yarra_boulevard.gpx")
@@ -52,4 +52,8 @@ class TestTrackViewModel(BaseCase):
         top_leaderboard_vml = track_view_model.top_leaderboard
         # Ensure there are three items in the leaderboard.
         self.assertEqual(top_leaderboard_vml.num_items, 3)
+        # Get the top of the leaderboard.
+        entry = top_leaderboard_vml.items[0]
+        # Ensure the vehicle is 1994 Toyota Supra.
+        self.assertEqual(entry.vehicle.title, "1994 Toyota Supra")
 

@@ -108,16 +108,17 @@ def set_enabled(email_address, enabled):
 @click.argument("email_address")
 @click.argument("password")
 @click.option("-u", "--username", default = None, type = str)
+@click.option("-d", "--drive", default = None, type = str)
 @click.option("-p", "--privilege", default = models.User.PRIVILEGE_USER, is_flag = False)
 @click.option("-e", "--enabled", default = True, is_flag = True)
 @click.option("-v", "--verified", default = True)
-def create_user(email_address, password, username, privilege, enabled, verified):
+def create_user(email_address, password, username, drive, privilege, enabled, verified):
     if models.User.search(email_address = email_address):
         raise Exception(f"Failed to create a new User ({email_address}), this user already exists.")
     LOG.debug(f"Creating a new HawkSpeed user; {email_address}")
     # Create this new user.
     new_user = factory.create_user(email_address, password,
-        privilege = privilege, enabled = enabled, verified = verified, username = username)
+        privilege = privilege, enabled = enabled, verified = verified, username = username, vehicle = drive)
     LOG.debug(f"Created new user '{new_user}'!")
     db.session.commit()
 

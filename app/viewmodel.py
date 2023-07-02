@@ -301,6 +301,46 @@ class BaseViewModel(SerialisableMixin):
         raise NotImplementedError(f"get_model_class() not implemented on {cls}")
 
 
+class VehicleViewModel(BaseViewModel):
+    """A view model for representing a specific User's vehicle."""
+    class VehicleViewSchema(BaseViewModel.BaseViewSchema):
+        """A schema for dumping the state of a User's vehicle."""
+        class Meta:
+            unknown = EXCLUDE
+        ### First some info about the Vehicle. ###
+        # The Vehicle's UID. Can't be None.
+        uid                 = fields.Str(required = True, allow_none = False)
+        # The Vehicle's text. Can't be None.
+        text                = fields.Str(required = True, allow_none = False)
+        # Does this vehicle belong to the actor? Can't be None.
+        belongs_to_you      = fields.Bool(required = True, allow_none = False)
+
+    @property
+    def uid(self):
+        """Returns the Vehicle's UID."""
+        return self.patient.uid
+    
+    @property
+    def title(self):
+        """Returns the Vehicle's title."""
+        return self.patient.title
+    
+    @property
+    def text(self):
+        """Returns the Vehicle's text."""
+        return self.patient.text
+    
+    @property
+    def belongs_to_you(self):
+        """Returns True if the vehicle belongs to the actor."""
+        return self.actor == self.patient.user
+    
+    def serialise(self, **kwargs):
+        """Serialise and return this vehicle view model."""
+        schema = VehicleViewModel.VehicleViewSchema(**kwargs)
+        return schema.dump(self)
+
+
 class LeaderboardEntryViewModel(BaseViewModel):
     """A view model for representing a specific user's race outcome as a leaderboard entry. We'll use a view model for this to allow users to like and
     comment on entries."""
@@ -318,10 +358,10 @@ class LeaderboardEntryViewModel(BaseViewModel):
         finished            = fields.Int(required = True, allow_none = False)
         # The total recorded time, in milliseconds, for this race. Can't be None.
         stopwatch           = fields.Int(required = True, allow_none = False)
-        # The vehicle this Player used to complete the race. Can't be None.
-        vehicle_used        = fields.Str(required = True, allow_none = False)
         # The Player that completed this race. Can't be None.
         player              = SerialiseViewModelField(required = True, allow_none = False)
+        # The vehicle this Player used to complete the race. Can't be None.
+        vehicle             = SerialiseViewModelField(required = True, allow_none = False)
         # The UID for the Track that was raced on. Can't be None.
         track_uid           = fields.Str(required = True, allow_none = False)
 
@@ -351,12 +391,12 @@ class LeaderboardEntryViewModel(BaseViewModel):
         return self.patient.stopwatch
 
     @property
-    def vehicle_used(self):
-        """Returns the vehicle used by this Player to complete the race."""
-        return self.patient.vehicle_used
+    def vehicle(self) -> VehicleViewModel:
+        """Returns a vehicle view model for the Vehicle used in the race."""
+        return VehicleViewModel(self.actor, self.patient.vehicle)
     
     @property
-    def player(self):
+    def player(self) -> UserViewModel:
         """A view model for the Player who raced."""
         return UserViewModel(self.actor, self.patient.user)
 
@@ -856,6 +896,11 @@ class AccountViewModel(BaseViewModel):
     def can_create_tracks(self):
         """TODO: can create tracks?"""
         return True
+    
+    @property
+    def vehicles(self) -> ViewModelList:
+        """Return a new view model list for all Vehicles belonging to this User."""
+        return ViewModelList.make(self.patient.all_vehicles, self.actor, VehicleViewModel)
 
     def __init__(self, _user, **kwargs):
         """The account view model only focuses on User to User view, for the same User."""

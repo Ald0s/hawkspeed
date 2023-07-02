@@ -1,7 +1,5 @@
 """A module for handling world operations."""
 import logging
-import os
-import gpxpy
 import random
 import hashlib
 
@@ -127,7 +125,7 @@ class RequestPlayerUpdateSchema(Schema):
     longitude               = fields.Decimal(as_string = True, required = True, allow_none = False)
     rotation                = fields.Decimal(as_string = True, required = True, allow_none = False)
     speed                   = fields.Decimal(as_string = True, required = True, allow_none = False)
-    # Timestamp, in seconds.
+    # Timestamp, in milliseconds.
     logged_at               = fields.Int(required = True, allow_none = False)
     
     @post_load
@@ -258,8 +256,8 @@ class WorldObjectUpdateResult():
 
 
 def collect_nearby_objects(user, user_location, **kwargs) -> WorldObjectUpdateResult:
-    """Given a User, and an instance of UserLocation, query all objects within acceptable proximity to the User's location. This is because objects nearby
-    are more likely to be seen consistently, and therefore should be updated at a more regular interval.
+    """Given a User, and an instance of UserLocation, query all objects within acceptable proximity to the User's location. We will provide this function
+    by default because we require objects near the Player to be updated, in the case that the Player moves their viewport elsewhere.
 
     Arguments
     ---------
@@ -270,10 +268,15 @@ def collect_nearby_objects(user, user_location, **kwargs) -> WorldObjectUpdateRe
     -------
     A WorldObjectUpdateResult, which is a summary report of those objects."""
     try:
-        """TODO: complete this."""
-        LOG.warning("collect_nearby_objects() is not yet implemented.")
-        # For now returns None.
-        return None
+        # Use the point set on the given User location, and buffer that by the proximity configured in settings.
+        proximity_polygon = user_location.point.buffer(config.NUM_METERS_PLAYER_PROXIMITY,
+            cap_style = shapely.geometry.CAP_STYLE.round)
+        # With the proximity polygon, we can perform a request for all world objects in that geometry.
+        tracks_in_proximity = db.session.query(models.Track)\
+            .filter(func.ST_Contains(shape.from_shape(proximity_polygon, srid = config.WORLD_CONFIGURATION_CRS), models.Track.point_geom))\
+            .all()
+        # Create a world object update result and return it.
+        return WorldObjectUpdateResult(tracks_in_proximity)
     except Exception as e:
         raise e
     

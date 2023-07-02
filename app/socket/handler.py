@@ -6,7 +6,7 @@ from flask_login import current_user
 
 from marshmallow import Schema, fields, pre_dump, EXCLUDE
 
-from .. import db, error, config, models, world, races, viewmodel
+from .. import db, error, config, models, users, world, races, viewmodel
 from . import authenticated_only, joined_players_only
 
 LOG = logging.getLogger("hawkspeed.socket.handler")
@@ -118,7 +118,13 @@ class WorldNamespace(Namespace):
             # Check whether the User currently has a socket ID set. If that is the case, we will run disconnect on it; which won't do anything if there is no connection.
             if current_user.socket_id != None:
                 disconnect(sid = current_user.socket_id)
+                # Does User have an ongoing race? If so, disqualify it.
+                if current_user.has_ongoing_race:
+                    races.disqualify_ongoing_race(current_user, races.RaceDisqualifiedError.DQ_CODE_DISCONNECTED)
+                # So yeah clear that socket session.
                 current_user.clear_socket_session()
+                # Then clear the current Vehicle.
+                current_user.clear_current_vehicle()
                 # Commit and finish.
                 db.session.commit()
         except Exception as e:
@@ -247,6 +253,7 @@ class WorldNamespace(Namespace):
         try:
             # Attempt to cancel any ongoing races.
             cancel_race_result = races.cancel_ongoing_race(current_user)
+            LOG.debug(f"Cancelled race {cancel_race_result.race} for {current_user}")
             # Serialise and return result.
             return cancel_race_result.serialise()
         except Exception as e:

@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta
 from flask import url_for
 from unittests.conftest import BaseAPICase
 
-from app import db, config, factory, models, login_manager, tracks
+from app import db, config, factory, models, login_manager, users
 
 
 class TestLoginLogout(BaseAPICase):
@@ -27,7 +27,7 @@ class TestLoginLogout(BaseAPICase):
         Ensure attempting to log into the aforementioned user with an incorrect password gets unauthorised request fail for 'incorrect-login'"""
         # Create a new user.
         aldos = factory.create_user("alden@mail.com", "password",
-            username = "alden")
+            username = "alden", vehicle = "1994 Toyota Supra")
         db.session.flush()
         # Ensure attempting to log in without email address gets invalid-email-address.
         login_request = self.client.post(url_for("api.authenticate"),
@@ -150,8 +150,10 @@ class TestRegistrationAndSetup(BaseAPICase):
         """Create a user with a username.
         Check whether another username is taken, should be False.
         Check whether the initial username is taken, should be True."""
-        aldos = factory.create_user("alden@gmail.com", "password", verified = True)
-        emily = factory.create_user("emily@mail.com", "password", verified = True, username = "emily")
+        aldos = factory.create_user("alden@gmail.com", "password",
+            verified = True)
+        emily = factory.create_user("emily@mail.com", "password",
+            verified = True, username = "emily", vehicle = "1994 Toyota Supra")
         db.session.flush()
         # Log aldos in, however.
         with self.app.test_client(user = aldos) as client:
@@ -234,12 +236,13 @@ class TestRegistrationAndSetup(BaseAPICase):
         """Create a User who is verified, but who is not setup.
         Submit a request to set the User's account up with the bio and username.
         Ensure this was successful, and the returned Account instance confirms what was sent, and profile is now setup."""
-        aldos = factory.create_user("alden@gmail.com", "password", verified = True)
+        aldos = factory.create_user("alden@gmail.com", "password",
+            verified = True)
         db.session.flush()
         # Log aldos in.
         with self.app.test_client(user = aldos) as client:
             setup_profile_response = client.post(url_for("api.setup_profile"),
-                data = json.dumps(dict(username = "aldos", bio = "This is a bio.", vehicle_information = "1994 Toyota Supra")),
+                data = json.dumps(dict(username = "aldos", bio = "This is a bio.", vehicle = dict(text = "1994 Toyota Supra"))),
                 content_type = "application/json")
             # Should have succeeded.
             self.assertEqual(setup_profile_response.status_code, 200)
@@ -250,12 +253,47 @@ class TestRegistrationAndSetup(BaseAPICase):
             self.assertEqual(aldos.bio, "This is a bio.")
             # Finally, confirm that profile is setup.
             self.assertEqual(account_d["is_profile_setup"], True)
+            """TODO: vehicles here."""
+            self.assertEqual(True, False)
 
 
 class TestUserAPI(BaseAPICase):
     def test_get_user(self):
         """"""
         self.assertEqual(True, False)
+
+    def test_get_our_vehicles(self):
+        """Test the API for getting the User's current list of Vehicles.
+        Create a new User with a single Vehicle.
+        Authenticate as that User, then perform a request for all Vehicles.
+        Ensure response was successful, and JSON response contains a single Vehicle. Ensure that Vehicle's UID matches the User's first Vehicle.
+        Create and add another Vehicle to the User.
+        Perform another request, this time, ensure the number of vehicles is 2."""
+        # Create a User.
+        aldos = factory.create_user("alden@mail.com", "password",
+            username = "alden", vehicle = "1994 Toyota Supra")
+        db.session.flush()
+        # Get all vehicles from aldos.
+        all_vehicles = aldos.all_vehicles
+        # Now, authenticate as the User.
+        with self.app.test_client(user = aldos) as client:
+            # Perform a request for our vehicles. Ensure its response is 200, then get its JSON.
+            our_vehicles_response = client.get(url_for("api.get_our_vehicles"))
+            self.assertEqual(our_vehicles_response.status_code, 200)
+            our_vehicles_json = our_vehicles_response.json
+            # Ensure there's one item in response, and that one item's UID matches the first item in all vehicles list.
+            self.assertEqual(len(our_vehicles_json["items"]), 1)
+            self.assertEqual(our_vehicles_json["items"][0]["uid"], all_vehicles[0].uid)
+            # Now, add another Vehicle to the User above.
+            users.create_vehicle(users.RequestCreateVehicle(text = "1997 Nissan Patrol"),
+                user = aldos)
+            db.session.flush()
+            # Perform a request for our vehicles. Ensure its response is 200, then get its JSON.
+            our_vehicles_response = client.get(url_for("api.get_our_vehicles"))
+            self.assertEqual(our_vehicles_response.status_code, 200)
+            our_vehicles_json = our_vehicles_response.json
+            # Ensure there's now two items in response.
+            self.assertEqual(len(our_vehicles_json["items"]), 2)
 
         
 class TestTrackAPI(BaseAPICase):
@@ -266,7 +304,7 @@ class TestTrackAPI(BaseAPICase):
         Ensure request was successful, UIDs matched and the number of points is not 0."""
         # Create a new User.
         aldos = factory.create_user("alden@mail.com", "password",
-            username = "alden", verified = True)
+            username = "alden", vehicle = "1994 Toyota Supra", verified = True)
         # Test that we can load a track from GPX.
         track = self.create_track_from_gpx(aldos, "example1.gpx",
             intersection_check = False)
@@ -289,16 +327,16 @@ class TestTrackAPI(BaseAPICase):
         For User1 again, step through the same race but at 1000 ms slower at each step."""
         # Create two new Users.
         aldos = factory.create_user("alden@mail.com", "password",
-            username = "alden")
+            username = "alden", vehicle = "1994 Toyota Supra")
         emily = factory.create_user("emily@mail.com", "password",
-            username = "emily")
+            username = "emily", vehicle = "1994 Toyota Supra")
         # Create a track.
         track = self.create_track_from_gpx(aldos, "yarra_boulevard.gpx")
         db.session.flush()
         # Now, for User1, step through the entire race yarra_boulevard_good_race_1.
         self.simulate_entire_race(aldos, track, os.path.join(os.getcwd(), config.IMPORTS_PATH, "races", "yarra_boulevard_good_race_1.gpx"))
         db.session.flush()
-        # Ensure user 1 has no ongoing race.
+        # Refresh aldos.
         db.session.refresh(aldos)
         # Now for User2, step through the same race, but at 500 ms slower.
         self.simulate_entire_race(emily, track, os.path.join(os.getcwd(), config.IMPORTS_PATH, "races", "yarra_boulevard_good_race_1.gpx"),
@@ -350,7 +388,7 @@ class TestTrackAPI(BaseAPICase):
         Perform a request for the track by its UID. Ensure that, in the result, our rating is None, there are 0 likes and 0 dislikes."""
         # Create a User.
         aldos = factory.create_user("alden@mail.com", "password",
-            username = "alden")
+            username = "alden", vehicle = "1994 Toyota Supra")
         # Create a track.
         track = self.create_track_from_gpx(aldos, "yarra_boulevard.gpx")
         # Now, authenticate as the User.
