@@ -36,5 +36,13 @@
 * Added UserVehicle model to represent vehicles used in racing, also added vehicles to tests and merged with setup flow,
 * Added the vehicle view model and basic API for querying current User's vehicles; with test,
 * Fixed lots of broken tests,
-* Implemented collect_nearby_objects and test,
+* Implemented collect_nearby_objects and test.
+
+## Version 0.00.06
 * Started writing tests for socket,
+* Refactored User model to move all world/socket related information to a dedicated 'player' model, that is dependant on the socket session,
+* Added dependancy on installation-unique identifier for user-player sessions. For now, may contemplate using firebase,
+* Improved TrackUserRace's stopwatch attribute, to now be dynamic in nature,
+* Implemented disqualified extra info on TrackUserRace,
+* Once again modified exception/error handling in sockets, this time providing a totally separate type of error and getting rid of severity,
+* Created frontend blueprint stub,

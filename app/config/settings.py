@@ -46,8 +46,8 @@ class BaseConfig(private.PrivateBaseConfig, RaceConfigurationMixin, GeospatialCo
     #SERVER_NAME = f"127.0.0.1:{PORT}"
     SERVER_URL = "http://192.168.0.253:5000"
 
-    SERVER_VERSION_TEXT = "0.00.05"
-    SERVER_VERSION_CODE = 5
+    SERVER_VERSION_TEXT = "0.00.06"
+    SERVER_VERSION_CODE = 6
 
     # Streaming configuration.
     MAX_CONTENT_LENGTH = 16 * 1024 * 1024 # 16 MB

@@ -63,7 +63,7 @@ def login_required(**kwargs):
                 if not current_user.enabled:
                     LOG.error(f"Failed to provide access to route at path; {request.path}; {current_user} is not enabled. Logging them out.")
                     # This will return a HTTP 401, which will totally log the User out.
-                    raise error.AccountSessionIssueFail("disabled")
+                    raise error.AccountSessionIssueFail(error.AccountSessionIssueFail.ERROR_DISABLED)
                 # Check to ensure the User is verified.
                 if not current_user.verified and verified_required:
                     LOG.error(f"Failed to provide access to route at path; {request.path}; {current_user} is not yet verified.")

@@ -5,10 +5,6 @@ import time
 import logging
 from datetime import datetime
 
-from flask import request, render_template, redirect, flash, url_for, send_from_directory, abort, jsonify, current_app
-from flask_login import login_required, current_user, login_user, logout_user
-from marshmallow import Schema, fields
-
 from . import db, config, login_manager, models, error
 
 LOG = logging.getLogger("hawkspeed.handler")
@@ -22,12 +18,12 @@ def load_user(id):
 
 @login_manager.unauthorized_handler
 def unauthorized():
-    """Called when the current user is not authenticated."""
-    raise error.AccountSessionIssueFail("session-expired-login")
+    """Called when the current user is not authenticated. We'll simply raise an account session issue fail. This should ultimately fall down to the
+    appropriate handler; either on API or frontend."""
+    raise error.AccountSessionIssueFail(error.AccountSessionIssueFail.ERROR_UNAUTHORISED)
 
 
-def configure_app_handlers(app):
-    @app.errorhandler(404)
-    def handle_not_found(e):
-        """"""
-        raise NotImplementedError()
+def configure_login_manager(app):
+    """Configure our login manager here."""
+    # Set the anonymous user we'll use.
+    login_manager.anonymous_user = models.AnonymousUser

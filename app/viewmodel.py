@@ -388,6 +388,9 @@ class LeaderboardEntryViewModel(BaseViewModel):
     @property
     def stopwatch(self):
         """The duration of this race, in milliseconds."""
+        # If race is not ongoing and not finished, return -1 from this function.
+        if not self.patient.is_ongoing and not self.patient.is_finished:
+            return -1
         return self.patient.stopwatch
 
     @property

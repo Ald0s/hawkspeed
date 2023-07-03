@@ -20,8 +20,8 @@ LOG = logging.getLogger("hawkspeed.races")
 LOG.setLevel( logging.DEBUG )
 
 
-class RaceStartError(Exception):
-    """An exception that will communicate the reason for a failed race start."""
+class RaceStartError(error.PublicSocketException):
+    """A publicly compatible exception that will communicate the reason for a failed race start."""
     # Player is already in an existing race.
     REASON_ALREADY_IN_RACE = "already-in-race"
     # Either countdown or started position is not supported.
@@ -39,8 +39,9 @@ class RaceStartError(Exception):
     # The race could not be started because the desired Vehicle could not be found.
     REASON_NO_VEHICLE = "no-vehicle"
     
-    def __init__(self, reason_code):
-        self.reason_code = reason_code
+    @property
+    def name(self):
+        return "start-race-fail"
 
 
 class RaceDisqualifiedError(Exception):
@@ -93,14 +94,14 @@ class TrackUserRaceSchema(Schema):
     object, and does not contain any data points that considers any perspective."""
     class Meta:
         unknown = EXCLUDE
-    uid                     = fields.Str()
-    track_uid               = fields.Str()
-    started                 = fields.Int()
+    uid                     = fields.Str(allow_none = False)
+    track_uid               = fields.Str(allow_none = False)
+    started                 = fields.Int(allow_none = False)
     finished                = fields.Int(allow_none = True)
-    disqualified            = fields.Bool()
+    disqualified            = fields.Bool(allow_none = False)
     dq_reason               = fields.Str(allow_none = True)
-    """dq_extra_info"""
-    cancelled               = fields.Bool()
+    dq_extra_info           = fields.Dict(keys = fields.Str(), values = fields.Str(), allow_none = True)
+    cancelled               = fields.Bool(allow_none = False)
 
 
 def get_ongoing_race(user, **kwargs) -> models.TrackUserRace:
@@ -131,7 +132,7 @@ class StartRaceResult():
         """A confirmation response that the race started correctly or that the race did not start for some reason or disqualification."""
         is_started              = fields.Bool(allow_none = False)
         race                    = fields.Nested(TrackUserRaceSchema, many = False, allow_none = True)
-        error_code              = fields.Str(allow_none = True)
+        exception               = fields.Nested(error.PubliclyCompatibleExceptionSchema, many = False, allow_none = True)
 
     @property
     def is_started(self):
@@ -144,13 +145,13 @@ class StartRaceResult():
         return self._track_user_race
 
     @property
-    def error_code(self):
-        return self._error_code
+    def exception(self):
+        return self._exception
 
     def __init__(self, _started, **kwargs):
         self._started = _started
         self._track_user_race = kwargs.get("track_user_race", None)
-        self._error_code = kwargs.get("error_code", None)
+        self._exception = kwargs.get("exception", None)
     
     def serialise(self, **kwargs):
         schema = self.StartRaceResponseSchema(**kwargs)
@@ -326,22 +327,22 @@ class CancelRaceResult():
         class Meta:
             unknown = EXCLUDE
         race                    = fields.Nested(TrackUserRaceSchema, many = False, allow_none = True)
-        reason_code             = fields.Str(allow_none = True)
+        cancellation_reason     = fields.Str(allow_none = True)
 
     @property
     def race(self):
         return self._track_user_race
     
     @property
-    def reason_code(self):
-        """Return the reason code, if any. If race is None, this means there was no race to cancel."""
+    def cancellation_reason(self):
+        """Return the reason for the cancellation, if any. If race is None, this means there was no race to cancel."""
         if not self._track_user_race:
             return CancelRaceResult.REASON_NO_ONGOING_RACE
-        return self._reason_code
+        return self._cancellation_reason
     
-    def __init__(self, _track_user_race = None, _reason_code = None, **kwargs):
+    def __init__(self, _track_user_race = None, _cancellation_reason = None, **kwargs):
         self._track_user_race = _track_user_race
-        self._reason_code = _reason_code
+        self._cancellation_reason = _cancellation_reason
     
     def serialise(self, **kwargs):
         """Serialise this result."""

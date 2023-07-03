@@ -1,13 +1,39 @@
 from flask import make_response, Response
+from marshmallow import Schema, fields, EXCLUDE
+
+
+class PubliclyCompatibleExceptionSchema(Schema):
+    """A schema for serialising an object that implements publicly compatible exception."""
+    class Meta:
+        unknown = EXCLUDE
+    # The name of the error overall.
+    name                    = fields.Str(required = True, allow_none = False)
+    # A peak into the error dict itself - the reason for the error occurring.
+    reason                  = fields.Str(required = True, allow_none = False)
+    # The full error dictionary, this will contain at least the reason.
+    error_dict              = fields.Dict(keys = fields.Str(), values = fields.Str())
 
 
 class PubliclyCompatibleException(Exception):
-    """
-    Provides functionality to an implementing subtype to make that type both an Exception that can be raised
+    """Provides functionality to an implementing subtype to make that type both an Exception that can be raised
     and also providing the subtype a function through which an object describing the error/exception can be
     called. Warning: data returned by the 'get_error_dict' will be sent to clients; so keep this in mind when
-    considering the depth of information.
-    """
+    considering the depth of information."""
+    @property
+    def name(self):
+        """This should return the name for the exception as a whole."""
+        raise NotImplementedError(f"Property name not implemented on PubliclyCompatibleException subtype {self}")
+    
+    @property
+    def reason(self):
+        """This should return a peek into the error dictionary, and retrieve the reason for this failure."""
+        raise NotImplementedError(f"Property reason not implemented on PubliclyCompatibleException subtype {self}")
+    
+    @property
+    def error_dict(self):
+        """The full error dictionary, this will contain at least the reason."""
+        raise NotImplementedError(f"Property error_dict not implemented on PubliclyCompatibleException subtype {self}")
+
     def get_error_name(self):
         """
         Get a minimised name for the outer exception. This will differentiate the errors on the client side, and should be a minimised version
@@ -23,6 +49,33 @@ class PubliclyCompatibleException(Exception):
         will be returned by default.
         """
         return dict()
+    
+
+class PublicSocketException(PubliclyCompatibleException):
+    """A type of publicly compatible exception that adheres specifically to socket type errors. These errors differ in that they do not have a severity level,
+    and do not need to be wrapped by anything else."""
+    @property
+    def name(self):
+        """This should return the name for the exception as a whole."""
+        raise NotImplementedError(f"Property name not implemented on PublicSocketException subtype {self}")
+    
+    @property
+    def reason(self):
+        return self.error_dict.get("reason", "unknown")
+    
+    @property
+    def error_dict(self):
+        return self._error_dict
+    
+    def __init__(self, reason, extra_args = dict(), **kwargs):
+        """Construct with a reason and an extra arguments dictionary. A new dictionary will be created; with reason and all extra arguments placed inside."""
+        self._error_dict = dict(
+            reason = reason,
+            **extra_args)
+    
+    def serialise(self, **kwargs):
+        schema = PubliclyCompatibleExceptionSchema(**kwargs)
+        return schema.dump(self)
 
 
 """Server-only errors. These do not implement PubliclyCompatibleException at all."""
@@ -59,6 +112,9 @@ class ProcedureRequiredException(PubliclyCompatibleException):
 
 
 class AccountSessionIssueFail(PubliclyCompatibleException):
+    ERROR_UNAUTHORISED = "unauthorised"
+    ERROR_DISABLED = "disabled"
+
     def __init__(self, _error_code):
         self.error_code = _error_code
 
@@ -83,40 +139,6 @@ class DeviceIssueFail(PubliclyCompatibleException):
             "error-code": self.error_code
         }
 
-
-"""Socket errors"""
-class JoinWorldRefusedError(PubliclyCompatibleException):
-    """A serialisable exception that communicates a User's attempt to join the world has been refused. This will only ever be raised in on_connect. Reason code
-    can be any reason found in ParsePlayerJoinedError."""
-    def __init__(self, reason_code, extra_args = dict(), **kwargs):
-        self.reason_code = reason_code
-        self.extra_args = extra_args
-
-    def get_error_name(self):
-        return "join-world-refused"
-
-    def get_error_dict(self):
-        return {
-            "reason": self.reason,
-            "extra-args": self.extra_args
-        }
-    
-    
-class KickedFromWorldError(PubliclyCompatibleException):
-    """A serialisable exception that informs the client they've been kicked from the world. Reason can be any reason code from ParsePlayerUpdateError."""
-    def __init__(self, reason, extra_args = dict(), **kwargs):
-        self.reason = reason
-        self.extra_args = extra_args
-
-    def get_error_name(self):
-        return "kicked-from-world"
-
-    def get_error_dict(self):
-        return {
-            "reason": self.reason,
-            "extra-args": self.extra_args
-        }
-    
 
 """Local errors"""
 class OperationalFail(PubliclyCompatibleException):
@@ -234,29 +256,3 @@ class GlobalAPIError(APIErrorWrapper):
     """
     def __init__(self, _publicly_compatible_exception, _http_error_code, **kwargs):
         super().__init__("global-error", _publicly_compatible_exception, _http_error_code)
-
-
-class SocketErrorWrapper(Exception):
-    """Provides a base for errors that should be compatible with HawkSpeed socket IO clients. This is almost the same as the API error, but lacks
-    HTTP specific information."""
-    def __init__(self, _severity, _publicly_compatible_exception, **kwargs):
-        self.severity = _severity
-        if not isinstance(_publicly_compatible_exception, PubliclyCompatibleException):
-            """Totally broken now, good luck recovering."""
-            raise Exception(f"{_publicly_compatible_exception} is not an instance of PubliclyCompatibleException!")
-        self.compat_exception = _publicly_compatible_exception
-
-    def to_dict(self) -> dict:
-        """Turns the contents of this object into a dictionary, ready to be sent."""
-        return dict(
-            severity = self.severity,
-            name = self.compat_exception.get_error_name(),
-            error = self.compat_exception.get_error_dict()
-        )
-
-
-class LocalSocketError(SocketErrorWrapper):
-    """A local socket error, this is in response to a single request from the client's device. This is the lowest severity, and the error
-    will not be propogated anywhere past the clientside locale from where the request was created."""
-    def __init__(self, _publicly_compatible_exception, **kwargs):
-        super().__init__("local-error", _publicly_compatible_exception)

@@ -290,7 +290,7 @@ def login_local_account(request_login_local, **kwargs) -> models.User:
         if not target_user.enabled:
             LOG.error(f"Failed to login local account {target_user}; account is DISABLED.")
             # Raise a critical error that will log the User out of their account on the client.
-            raise error.AccountSessionIssueFail("disabled")
+            raise error.AccountSessionIssueFail(error.AccountSessionIssueFail.ERROR_DISABLED)
         # We can now log the User in.
         if not login_user(target_user,
             remember = request_login_local.remember_me):

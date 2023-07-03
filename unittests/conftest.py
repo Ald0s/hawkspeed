@@ -1,7 +1,6 @@
 import os
-import random
-import hashlib
-import pandas
+import time
+import uuid
 import gpxpy
 import mimetypes
 import simplejson as json
@@ -112,6 +111,17 @@ class BaseCase(TestCase):
         # And return.
         return new_mocked_file
     
+    def make_user_player(self, user, request_connect_authentication = None, **kwargs):
+        """Create a new UserPlayer session for the given User, and set it on the User."""
+        socket_id = kwargs.get("socket_id", uuid.uuid4().hex.lower())
+        if not request_connect_authentication:
+            request_connect_authentication = world.RequestConnectAuthentication(
+                device_fid = uuid.uuid4().hex.lower(), latitude = 0.0, longitude = 0.0, rotation = 0.0, speed = 0.0, logged_at = time.time() * 1000)
+        new_player = world.create_player_session(user, socket_id, request_connect_authentication)
+        user.set_player(new_player)
+        db.session.flush()
+        return user, new_player
+
     def create_track_from_gpx(self, user, filename, **kwargs):
         """Import an a track using the tracks module, given the filename and keyword arguments, and set its ownership to the User given."""
         created_track = tracks.create_track_from_gpx(filename, **kwargs)

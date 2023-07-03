@@ -14,6 +14,50 @@ from app import db, config, factory, models, login_manager, world, tracks, races
 
 
 class TestRaces(BaseCase):
+    def test_stopwatch(self):
+        """Test both instance level and expression level for property stopwatch."""
+        # Create a new User.
+        aldos = factory.create_user("alden@mail.com", "password",
+            username = "alden", vehicle = "1994 Toyota Supra")
+        db.session.flush()
+        vehicle = aldos.vehicles.first()
+        # Create a track.
+        track = self.create_track_from_gpx(aldos, "example1.gpx")
+        db.session.flush()
+        time_now = time.time()
+        # Create a new track user race for between this user and track.
+        race = models.TrackUserRace(
+            started = time_now * 1000)
+        race.set_track_and_user(track, aldos)
+        race.set_vehicle(vehicle)
+        # Set the CRS for this geometry.
+        race.set_crs(config.WORLD_CONFIGURATION_CRS)
+        db.session.add(race)
+        db.session.flush()
+        # Set current timestamp to time now plus 10 seconds.
+        time_now += 10
+        self.set_timestamp_now(time_now)
+        # Now, get stopwatch from track, both instance and expression. It should be 10000.
+        self.assertEqual(race.stopwatch, 10000)
+        self.assertEqual(db.session.query(models.TrackUserRace.stopwatch).filter(models.TrackUserRace.uid == race.uid).scalar(), 10000)
+        # Add another 2 seconds, repeat.
+        time_now += 2
+        self.set_timestamp_now(time_now)
+        # Now, get stopwatch from track, both instance and expression. It should be 12000.
+        self.assertEqual(race.stopwatch, 12000)
+        self.assertEqual(db.session.query(models.TrackUserRace.stopwatch).filter(models.TrackUserRace.uid == race.uid).scalar(), 12000)
+        # Now, set the finished timestamp to the value of time now plus 30.
+        time_now += 30
+        race.set_finished(time_now * 1000)
+        db.session.flush()
+        # Add another 15 seconds to time now, then set timestamp now to that value.
+        time_now += 15
+        self.set_timestamp_now(time_now)
+        # Now, if property was utilising time now, current stopwatch value would be 57000, but since we finished at second 42, it should be 42000.
+        # Both instance and expression
+        self.assertEqual(race.stopwatch, 42000)
+        self.assertEqual(db.session.query(models.TrackUserRace.stopwatch).filter(models.TrackUserRace.uid == race.uid).scalar(), 42000)
+
     def test_races_basics(self):
         # Create a new User.
         aldos = factory.create_user("alden@mail.com", "password",

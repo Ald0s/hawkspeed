@@ -396,8 +396,7 @@ def handle_exception(e):
     if isinstance(e, error.AccountSessionIssueFail):
         # This a global error to do with the User's account, meaning that the User's account session is invalid, expired or otherwise unacceptable. On the client, the reception of any 401
         # status should result in the clearing of the account information and the absolute exit from authenticated activities. An example of a request that falls under this category could
-        # be the User account being disabled as its being used. Navigating to ANY protected view will result in this 401.
-        # Serve as a GlobalAPIError and HTTP status 401.
+        # be the User account being disabled as its being used. Navigating to ANY protected view will result in this 401. Serve as a GlobalAPIError and HTTP status 401.
         # Prior to actually returning the response we'll first log the User out via the account module.
         account.logout_user()
         return error.GlobalAPIError(e, 401).to_response()

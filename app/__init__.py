@@ -11,7 +11,7 @@ Changes
 import os
 import logging
 
-from flask import Flask, request, g, redirect, url_for
+from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager
 from flask_socketio import SocketIO
@@ -33,6 +33,7 @@ login_manager = LoginManager()
 socketio = SocketIO()
 
 from .api import api as api_blueprint
+from .frontend import frontend as frontend_blueprint
 from .socket import setup_socketio
 from . import handler
 
@@ -46,8 +47,7 @@ def create_app():
         x_proto = config.FORWARDED_PROTO,
         x_host = config.FORWARDED_HOST,
         x_port = config.FORWARDED_PORT,
-        x_prefix = config.FORWARDED_PREFIX
-    )
+        x_prefix = config.FORWARDED_PREFIX)
     app.config.from_object(config)
     app.url_map.strict_slashes = False
     db.init_app(app)
@@ -59,9 +59,10 @@ def create_app():
         if db.engine.dialect.name == "sqlite":
             compat.should_load_spatialite_sync(db.engine)
         app.register_blueprint(api_blueprint)
+        app.register_blueprint(frontend_blueprint)
         setup_socketio(socketio)
-        # Import all our handlers; like unauthorised etc.
-        handler.configure_app_handlers(app)
+        # Configure our login manager.
+        handler.configure_login_manager(app)
         if config.APP_ENV != "Test":
             pass
     return app

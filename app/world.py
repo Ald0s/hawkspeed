@@ -155,6 +155,7 @@ class RequestPlayerViewportUpdateSchema(Schema):
 class RequestConnectAuthentication():
     """A container for a loaded request for a player update."""
     def __init__(self, **kwargs):
+        self.device_fid = kwargs.get("device_fid")
         self.latitude = kwargs.get("latitude")
         self.longitude = kwargs.get("longitude")
         self.rotation = kwargs.get("rotation")
@@ -166,6 +167,8 @@ class RequestConnectAuthenticationSchema(Schema):
     """A subtype of the player update, specifically for the Player's initial report upon connection."""
     class Meta:
         unknown = EXCLUDE
+    # About the Player's device when joining.
+    device_fid              = fields.Str(required = True, allow_none = False)
     # About the Player's initial position when joining.
     latitude                = fields.Decimal(as_string = True, required = True, allow_none = False)
     longitude               = fields.Decimal(as_string = True, required = True, allow_none = False)
@@ -196,6 +199,32 @@ class RequestViewportUpdateSchema(Schema):
     def request_viewport_update_post_load(self, data, **kwargs) -> RequestViewportUpdate:
         return RequestViewportUpdate(**data)
 
+
+def create_player_session(user, socket_id, request_connect_authentication) -> models.UserPlayer:
+    """Create and return a new UserPlayer session for the given User, based on the request to connect and authenticate for the world. This function will not
+    explicitly add the Player to the session, but this may be done automatically by back propagating based on the keys. That said, latest SQLAlchemy should
+    still avoid add operation since player is not explicitly added.
+    
+    Arguments
+    ---------
+    :user: The User to create the new session for.
+    :socket_id: The current Socket's SID.
+    :request_connect_authentication: An instance of RequestConnectAuthentication.
+    
+    Returns
+    -------
+    The new UserPlayer instance."""
+    try:
+        # Instantiate a new UserPlayer.
+        new_player = models.UserPlayer()
+        # Set the key for this Player.
+        new_player.set_key(user, request_connect_authentication.device_fid, socket_id)
+        """TODO: here is where we can set current Vehicle, if Vehicle is required for the duration of the session."""
+        # Return the new Player.
+        return new_player
+    except Exception as e:
+        raise e
+    
 
 class ViewportUpdateResult():
     """A container for the Player's update for their viewport being successfully processed."""
@@ -300,6 +329,14 @@ class PlayerJoinResult():
         return self._user_location.rotation
     
     @property
+    def crs(self):
+        return self._user_location.crs
+
+    @property
+    def position(self):
+        return self._user_location.position
+    
+    @property
     def world_object_update(self):
         return self._world_object_result
 
@@ -366,6 +403,14 @@ class PlayerUpdateResult():
     @property
     def rotation(self):
         return self._user_location.rotation
+    
+    @property
+    def crs(self):
+        return self._user_location.crs
+
+    @property
+    def position(self):
+        return self._user_location.position
 
     @property
     def world_object_update(self):
@@ -411,6 +456,10 @@ def parse_player_update(user, request_player_update, **kwargs) -> PlayerUpdateRe
         user.add_location(user_location)
         # Update this user's last location received.
         user.set_last_location_update()
+        # Now, if the User currently has a Player, we'll update that Player's position.
+        if user.has_player:
+            user.player.set_crs(user_location.crs)
+            user.player.set_position(user_location.position)
         # Flush user location so that it is given an ID.
         db.session.flush()
         # Trim the User's location history to ensure they retain just enough.
@@ -450,7 +499,7 @@ def _prepare_user_location(request_player_update, **kwargs) -> models.UserLocati
         return user_location
     except PositionNotSupportedError as pnse:
         if pnse.error_code == PositionNotSupportedError.CODE_OUTSIDE_CRS or pnse.error_code == PositionNotSupportedError.CODE_BAD_CRS:
-            raise PrepareUserLocationError(PrepareUserLocationError.REASON_POSITION_NOT_SUPPORTED)
+            raise PrepareUserLocationError(request_player_update, PrepareUserLocationError.REASON_POSITION_NOT_SUPPORTED)
         else:
             raise NotImplementedError(f"Failed to _prepare_user_location, unknown position not supported error: {pnse.error_code}")
     except Exception as e:

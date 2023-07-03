@@ -13,6 +13,21 @@ LOG = logging.getLogger("hawkspeed.socket.handler")
 LOG.setLevel( logging.DEBUG )
 
 
+class JoinWorldRefusedError(error.PublicSocketException):
+    """A serialisable exception that communicates a User's attempt to join the world has been refused. This will only ever be raised in on_connect. Reason code
+    can be any reason found in ParsePlayerJoinedError."""
+    @property
+    def name(self):
+        return "join-world-refused"
+
+
+class KickedFromWorldError(error.PublicSocketException):
+    """A serialisable exception that informs the client they've been kicked from the world. Reason can be any reason code from ParsePlayerUpdateError."""
+    @property
+    def name(self):
+        return "kicked-from-world"
+    
+
 class ViewportUpdateResponseSchema(Schema):
     """A schema for dumping a response to a viewport update. This schema requires view models returned."""
     class Meta:
@@ -78,28 +93,37 @@ class WorldNamespace(Namespace):
         ConnectAuthenticationSchema attributes. Upon successful result, an instance of ConnectedAndJoinedSchema will be serialised and emitted toward the current socket ID. A User
         can only be connected once at a time. Reconnecting over a previous connection will boot the old one.
 
+        There is no reason to place an exception in the connect response schema, because the only way joining can fail is with the return of connectionrefusederror.
+
         Arguments
         ---------
         :auth_j: A JSON object containing RequestConnectAuthenticationSchema."""
         try:
-            LOG.debug(f"A User ({current_user}) is attempting to join the world.")
+            LOG.debug(f"User {current_user} ({request.sid}) is attempting to join the world.")
             # Load the auth_j argument as a RequestConnectAuthentication instance.
             request_connect_auth_schema = world.RequestConnectAuthenticationSchema()
             request_connect_authentication = request_connect_auth_schema.load(auth_j)
-            # Check the current user's socket ID. If this is not None, disconnect and set it to None.
-            if current_user.socket_id:
-                # We have an existing socket ID on this User; it must go. Call disconnect on it. This will invoke the disconnection event handler, which will set this to None.
-                LOG.warning(f"User {current_user} has joined the HawkSpeed world (on sid {request.sid}), but is apparently already connected via SocketID {current_user.socket_id}.")
-                disconnect(sid = current_user.socket_id)
-            # Update current socket session and commit.
-            current_user.set_socket_session(request.sid)
+            # Check to see if the current User currently has a Player. If they do, disconnect that version and clear it.
+            if current_user.has_player:
+                # We have an existing player on this User; it must go. Call disconnect on it. This will invoke the disconnection event handler, which will set this to None.
+                LOG.warning(f"User {current_user} has joined the HawkSpeed world (on sid {request.sid}), but is apparently already connected via SocketID {current_user.player.socket_id}.")
+                disconnect(sid = current_user.player.socket_id)
+            # We'll now create a new Player instance for the incoming User.
+            new_player = world.create_player_session(current_user, request.sid, request_connect_authentication)
             # Parse the player's join request, getting back a result.
             try:
                 player_join_result = world.parse_player_joined(current_user, request_connect_authentication)
             except world.ParsePlayerJoinedError as ppje:
                 # Raise this to be handled globally.
                 raise ppje
+            # If processing the location is a success, we will set the geometry on our new Player instance to mirror that location.
+            new_player.set_crs(player_join_result.crs)
+            new_player.set_position(player_join_result.position)
+            # Now, set the User's player, then add the new Player to the session and finally commit + refresh the User.
+            current_user.set_player(new_player)
+            db.session.add(new_player)
             db.session.commit()
+            db.session.refresh(current_user)
             # Serialise the player join result.
             player_join_response_schema = PlayerJoinResponseSchema()
             player_join_d = player_join_response_schema.dump(player_join_result)
@@ -115,18 +139,16 @@ class WorldNamespace(Namespace):
         """Called when the client has disconnected from the server, or if the server has disconnected the client. Either way, this function will clean the User's session up."""
         try:
             LOG.debug(f"A User ({current_user}, sid={request.sid}) has disconnected from the world!")
-            # Check whether the User currently has a socket ID set. If that is the case, we will run disconnect on it; which won't do anything if there is no connection.
-            if current_user.socket_id != None:
-                disconnect(sid = current_user.socket_id)
+            # Check whether the User currently has a Player.
+            if current_user.has_player:
                 # Does User have an ongoing race? If so, disqualify it.
                 if current_user.has_ongoing_race:
                     races.disqualify_ongoing_race(current_user, races.RaceDisqualifiedError.DQ_CODE_DISCONNECTED)
-                # So yeah clear that socket session.
-                current_user.clear_socket_session()
-                # Then clear the current Vehicle.
-                current_user.clear_current_vehicle()
-                # Commit and finish.
+                # Then clear the User's Player.
+                current_user.clear_player()
+                # Commit, then expire then refresh the current User.
                 db.session.commit()
+                db.session.refresh(current_user)
         except Exception as e:
             raise e
 
@@ -190,6 +212,7 @@ class WorldNamespace(Namespace):
         except world.CollectViewedObjectsError as cvoe:
             """TODO: failed to collect viewed objects. Determine why and re-raise if necessary. But for errors like viewport not supported, we can simply return
             a failure-type object that informs client of the issue."""
+            raise NotImplementedError()
         except Exception as e:
             raise e
     
@@ -199,12 +222,7 @@ class WorldNamespace(Namespace):
         started. As well, the desired track's UID should be supplied. This handler will respond with a start race result schema which will communicate whether the race
         was started or an issue occurred.
 
-        If a race is ongoing, this function will fail and return an error in the result.
-        
-        Socket Errors & Exceptions
-        --------------------------
-        The error_code in StartRaceResult can be ANY of the codes supported by the following entities:
-          1. RaceStartError"""
+        If a race is ongoing, this function will fail and return an error in the result. The result is a serialised StartRaceResult."""
         try:
             if races.get_ongoing_race(current_user) != None:
                 # If there is an ongoing race, raise the appropriate race start error, with reason REASON_ALREADY_IN_RACE.
@@ -222,9 +240,7 @@ class WorldNamespace(Namespace):
                     # Raise this to be handled locally, in the handler for on start race.
                     raise races.RaceStartError(races.RaceStartError.REASON_POSITION_NOT_SUPPORTED)
                 else:
-                    """TODO: properly implement this."""
-                    LOG.error(f"An unsupported condition was hit in ParsePlayerUpdateError handler within on_start_race! Reason code: {ppue.reason_code}")
-                    raise NotImplementedError()
+                    raise NotImplementedError(f"An unsupported condition was hit in ParsePlayerUpdateError handler within on_start_race! Reason code: {ppue.reason_code}")
             # Now that we have our player update result, pass it alongside the start race request to the races module, for a new race to be created. A StartRaceResult is expected.
             # This function call may also raise a RaceStartError.
             start_race_result = races.start_race_for(current_user, request_start_race, player_update_result)
@@ -236,7 +252,7 @@ class WorldNamespace(Namespace):
             # Rollback transaction, then build a new start race result that contains the failure reason and return this as receipt.
             db.session.rollback()
             start_race_result = races.StartRaceResult(False, 
-                error_code = rse.reason_code)
+                exception = rse)
             return start_race_result.serialise()
         except Exception as e:
             db.session.rollback()
@@ -244,16 +260,13 @@ class WorldNamespace(Namespace):
     
     @joined_players_only()
     def on_cancel_race(self, cancel_j, **kwargs):
-        """Cancel the currently ongoing race, and return a race cancelled response as a result. If there is no ongoing race, this function will respond with a None-like race cancelled result.
-        
-        Socket Errors & Exceptions
-        --------------------------
-        The error_code in CancelRaceResult can be ANY of the codes supported by the following entities:
-          1. CancelRaceResult"""
+        """Cancel the currently ongoing race, and return a race cancelled response as a result. If there is no ongoing race, this function will respond with a None-like race cancelled result."""
         try:
             # Attempt to cancel any ongoing races.
             cancel_race_result = races.cancel_ongoing_race(current_user)
             LOG.debug(f"Cancelled race {cancel_race_result.race} for {current_user}")
+            # Commit, then serialise and return the result.
+            db.session.commit()
             # Serialise and return result.
             return cancel_race_result.serialise()
         except Exception as e:
@@ -273,7 +286,8 @@ def handle_world_error(e):
         2. Send the user an error event describing this issue.
         3. Disconnect the user from the socket server."""
         # Finally, raise a connection refused error with the content being a local socket error of a join world refused error.
-        raise ConnectionRefusedError(error.LocalSocketError(error.JoinWorldRefusedError(e.reason_code)).to_dict())
+        LOG.warning(f"{current_user} ({request.sid}) was refused access to the world; {e.reason_code}")
+        raise ConnectionRefusedError(JoinWorldRefusedError(e.reason_code).serialise())
     elif isinstance(e, world.ParsePlayerUpdateError):
         """This error being raised constitutes a failure to parse a request by a player to update their position in the world. This may be for many reasons, that we will log here.
         The resolution for this error always involves disconnecting the user from the world."""
@@ -285,7 +299,8 @@ def handle_world_error(e):
         2. Send the user an error event describing this issue.
         3. Disconnect the user from the socket server."""
         # Finally, emit a kick notification for the client, prior to disconnecting them.
-        emit("kicked", error.LocalSocketError(error.KickedFromWorldError(e.reason_code)).to_dict(),
+        LOG.warning(f"{current_user} ({request.sid}) was kicked from world; {e.reason_code}")
+        emit("kicked", KickedFromWorldError(e.reason_code).serialise(),
             sid = request.sid)
     else:
         # Otherwise, re-raise this error after printing it.

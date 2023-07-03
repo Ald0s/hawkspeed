@@ -1,16 +1,11 @@
-import re
-import os
 import time
 import uuid
-import random
 import logging
 import pytz
-import string
 import json
-import binascii
 import hashlib
 
-from typing import List, Optional
+from typing import List
 from datetime import datetime, date, timedelta, timezone
 
 # All imports for geospatial aspect.
@@ -18,21 +13,19 @@ import pyproj
 from shapely import geometry, wkb, ops
 from geoalchemy2 import Geometry, shape
 
-from flask_login import AnonymousUserMixin, UserMixin, current_user
-from flask import request, g
+from flask_login import AnonymousUserMixin, UserMixin
+from flask import g
 from sqlalchemy import asc, desc, or_, and_, func, select, case, insert, union_all
-from sqlalchemy import Table, Column, BigInteger, Boolean, Date, DateTime, Numeric, String, Text, PickleType, ForeignKey, ForeignKeyConstraint
+from sqlalchemy import Table, Column, BigInteger, Boolean, Date, DateTime, Numeric, String, Text, ForeignKey, ForeignKeyConstraint, UniqueConstraint
 from sqlalchemy.types import TypeDecorator, CHAR
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship, aliased, Mapped, mapped_column, with_polymorphic, declared_attr, column_property, query_expression
-from sqlalchemy.sql.expression import cast
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.hybrid import hybrid_property, hybrid_method
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.ext.associationproxy import association_proxy, AssociationProxy
 from sqlalchemy.event import listens_for
 from sqlite3 import IntegrityError as SQLLite3IntegrityError
 from werkzeug.security import generate_password_hash, check_password_hash
-from marshmallow import Schema, fields, EXCLUDE, post_load
 
 from . import db, config, login_manager, error, compat
 
@@ -317,9 +310,7 @@ class TrackUserRace(db.Model, LineStringGeometryMixin):
     cancelled: Mapped[bool] = mapped_column(nullable = False, default = False)
     # Average speed, in meters per hour. Can be None.
     average_speed: Mapped[int] = mapped_column(nullable = True, default = None)
-    # The time taken thus far, in milliseconds. Can be None.
-    stopwatch: Mapped[int] = mapped_column(nullable = True, default = None)
-
+ 
     # An association proxy for the Track's UID, which is actually the track's hash.
     track_uid: AssociationProxy["Track"] = association_proxy("track", "uid")
 
@@ -346,6 +337,23 @@ class TrackUserRace(db.Model, LineStringGeometryMixin):
     def __repr__(self):
         return f"TrackUserRace<{self.track},{self.user},o={self.is_ongoing},dq={self.is_disqualified}>"
 
+    @hybrid_property
+    def stopwatch(self):
+        """Instance level property for getting the total amount of time, in milliseconds, elapsed by this race so far. The result is calculated by
+        subtracting the 'started' timestamp attribute from either current timestamp (in milliseconds) or the finished timestamp (if given). Keep in
+        mind that if finished is False, current timestamp will be used no matter what; so stopwatch could eventually report an ever growing number
+        in both instance and expression levels."""
+        if self.is_finished:
+            # Race is finished. Calculate difference between finished timestamp and the started timestamp.
+            return self.finished - self.started
+        # Race is not finished. Calculate difference between current time and the started timestamp.
+        return (g.get("timestamp_now", time.time()) * 1000) - self.started
+
+    @stopwatch.expression
+    def stopwatch(cls):
+        """Expression level property for getting this race's set (or ongoing) time."""
+        return func.coalesce(cls.finished, g.get("timestamp_now", time.time()) * 1000) - cls.started
+    
     @hybrid_property
     def is_ongoing(self):
         """Returns True when finished is None, disqualified is False and cancelled is False."""
@@ -374,8 +382,7 @@ class TrackUserRace(db.Model, LineStringGeometryMixin):
     @property
     def vehicle_used(self):
         """Returns the vehicle used by this Player to complete the race."""
-        """TODO: complete this. For now, it will just return NO VEHICLE."""
-        return "NO VEHICLE"
+        return self.vehicle
     
     @property
     def is_cancelled(self):
@@ -389,13 +396,18 @@ class TrackUserRace(db.Model, LineStringGeometryMixin):
 
     @property
     def dq_extra_info(self):
-        """TODO: If not None, parse dq_extra_info_ as JSON and return."""
-        raise NotImplementedError()
+        """Returns the disqualified extra info as a dictionary if set, otherwise None is returned."""
+        if not self.dq_extra_info_:
+            return None
+        return json.loads(self.dq_extra_info_)
 
     @dq_extra_info.setter
     def dq_extra_info(self, value):
-        """TODO: If value None, set dq_extra_info_ to None. Else, dump value as JSON string and set dq_extra_info_."""
-        raise NotImplementedError()
+        """Sets the given disqualified extra info dictionary to the one given, or None."""
+        if value:
+            self.dq_extra_info_ = json.dumps(value)
+        else:
+            self.dq_extra_info_ = None
 
     def set_vehicle(self, vehicle):
         """Set this race's vehicle."""
@@ -406,16 +418,15 @@ class TrackUserRace(db.Model, LineStringGeometryMixin):
         self.track = track
         self.user = user
 
-    def set_finished(self, time_finished):
+    def set_finished(self, time_finished_ms):
         """Set this race to finished. This supplied timestamp must be in milliseconds."""
         # Set the timestamp we finished at.
-        self.finished = time_finished
-        # Update the stopwatch with this time.
-        self.update_stopwatch(time_finished)
+        self.finished = time_finished_ms
 
     def disqualify(self, dq_reason, **kwargs):
         """A one way function. This will set the disqualified flag to True, and the accompanying arguments."""
         dq_extra_info = kwargs.get("dq_extra_info", None)
+
         self.disqualified = True
         self.disqualification_reason = dq_reason
         if dq_extra_info:
@@ -433,19 +444,8 @@ class TrackUserRace(db.Model, LineStringGeometryMixin):
         """Add the location as progress."""
         # Add the new location.
         self.progress.append(location)
-        # With each new accepted location, update the stopwatch too.
-        self.update_stopwatch(location.logged_at)
         # Each time we add a new location, we must re-comprehend the progress geometry.
         self._refresh_progress_geometry()
-
-    def update_stopwatch(self, new_timestamp_ms):
-        """Update the stopwatch attribute with the latest timestamp. The given timestamp should be in milliseconds."""
-        # Stopwatch is the difference between the new timestamp and the timestamp at which we started the race.
-        new_stopwatch = new_timestamp_ms-self.started
-        if new_stopwatch < 0:
-            """TODO: remove after we are sure this is never triggered."""
-            raise NotImplementedError()
-        self.stopwatch = new_stopwatch
 
     def _refresh_progress_geometry(self):
         """Get all geometries from the list of progress locations, and set the race's progress geometry to the result."""
@@ -502,8 +502,8 @@ class TrackComment(db.Model):
     a third attribute as part of our composite key; a UID."""
     __tablename__ = "track_comment"
 
-    # Composite primary key, involving the track and user models, as well as a UID. Both track and user references will cascade on delete, hopefully deleting the
-    # rating if either the User or track is deleted.
+    # Composite primary key, involving the track and user models, as well as a UID for allowing multiple comments on same track for same user. Both track and user
+    # references will cascade on delete, hopefully deleting the comment if either the User or track is deleted.
     track_id: Mapped[int] = mapped_column(ForeignKey("track.id", ondelete = "CASCADE"), primary_key = True)
     user_id: Mapped[int] = mapped_column(ForeignKey("user_.id", ondelete = "CASCADE"), primary_key = True)
     uid: Mapped[str] = mapped_column(GUID(), primary_key = True, default = lambda: uuid.uuid4().hex.lower())
@@ -621,7 +621,7 @@ class Track(db.Model, PointGeometryMixin):
     @can_be_raced.expression
     def can_be_raced(cls):
         """Expression level equivalent of can be raced."""
-        raise NotImplementedError()
+        return and_(cls.is_verified, cls.has_owner)
     
     @hybrid_property
     def is_verified(self):
@@ -671,7 +671,7 @@ class Track(db.Model, PointGeometryMixin):
         """Set the owner of this track to the given User."""
         self.user = user
 
-    @classmethod
+    '''@classmethod
     def find(cls, **kwargs):
         """Find a track matching the given criteria. Only the first result of whatever criteria given will be returned."""
         track_hash = kwargs.get("track_hash", None)
@@ -683,7 +683,7 @@ class Track(db.Model, PointGeometryMixin):
         if track_uid:
             track_q = track_q\
                 .filter(Track.uid == track_uid)
-        return track_q.first()
+        return track_q.first()'''
 
 
 class UserVerify(db.Model):
@@ -842,7 +842,6 @@ class UserVehicle(db.Model, HasUUIDMixin):
     # The User that owns this Vehicle. Can't be None.
     user: Mapped["User"] = relationship(
         back_populates = "vehicles_",
-        foreign_keys = [user_id],
         uselist = False)
     
     def __repr__(self):
@@ -856,6 +855,76 @@ class UserVehicle(db.Model, HasUUIDMixin):
     def set_text(self, text):
         """Set this vehicle's text."""
         self.text = text
+    
+
+class UserPlayer(db.Model, PointGeometryMixin):
+    """A model that represents a single socket session for a single User. Logically, all attributes that are dependant on the User being joined to the game world
+    will now be associated with this table. At most, there can be one UserPlayer instance at any time for one User. If a User connects on a new session, any existing
+    instances of this model will be deleted and replaced.
+    
+    This model is also a point geometry, which can contain the User's current location."""
+    __tablename__ = "user_player"
+    
+    # Composite primary key involving the User's ID, the device's firebase installation ID and the SID. We will cascade a delete if User is deleted.
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_.id", ondelete = "CASCADE"), primary_key = True)
+    device_fid: Mapped[str] = mapped_column(String(256), primary_key = True)
+    socket_id: Mapped[str] = mapped_column(String(32), primary_key = True)
+    # The ID of the vehicle currently in use by this User for the session. Currently, we don't require a vehicle for connecting to the world, so this we will set
+    # this to NULL on cascade; also meaning this can be None.
+    current_vehicle_id: Mapped[int] = mapped_column(ForeignKey("user_vehicle.id", ondelete = "SET NULL"), nullable = True)
+
+    # An association proxy for the User's UID, which is the Player's UID.
+    uid: AssociationProxy["User"] = association_proxy("user", "uid")
+    # A timestamp, in seconds, when this session was created. Can't be None.
+    created: Mapped[int] = mapped_column(BigInteger(), nullable = False, default = time.time)
+    # The last time a location update was received from this User, as a timestamp in seconds. Can't be None.
+    last_location_update: Mapped[int] = mapped_column(BigInteger(), nullable = False, default = time.time)
+
+    # The vehicle currently in use by this User for the current session. Can be None.
+    current_vehicle: Mapped[UserVehicle] = relationship(
+        uselist = False)
+
+    # The User currently joined to the world.
+    user: Mapped["User"] = relationship(
+        back_populates = "player_",
+        uselist = False)
+    
+    # We will add a unique constraint on the User ID by itself, since we require there be only one Player instance for each User, on top of identifying a specific
+    # session by all three attributes.
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",),)
+    
+    def __repr__(self):
+        if not self.user:
+            return "UserPlayer<***NEW***>"
+        return f"UserPlayer<{self.user}>"
+    
+    @property
+    def is_playing(self):
+        """Returns true if the time since last location update is under 60 seconds."""
+        return time.time()-self.last_location_update < 60
+    
+    def set_key(self, user_id, device_fid, socket_id):
+        """Set the composite key for this instance."""
+        if isinstance(user_id, User):
+            self.user_id = user_id.id
+        else:
+            self.user_id = user_id
+        self.device_fid = device_fid
+        self.socket_id = socket_id
+
+    def set_current_vehicle(self, vehicle):
+        """Set this Player's current vehicle."""
+        self.current_vehicle = vehicle
+
+    def clear_current_vehicle(self):
+        """Clear this Player's current vehicle."""
+        self.current_vehicle = None
+
+    def set_last_location_update(self, last_timestamp_s = time.time()):
+        """Set the timestamp, in seconds, when the last location update was received."""
+        self.last_location_update = last_timestamp_s
 
 
 class User(UserMixin, db.Model, HasUUIDMixin):
@@ -891,18 +960,11 @@ class User(UserMixin, db.Model, HasUUIDMixin):
     # The last time a location update was received from this User, as a timestamp in seconds. This will not be nulled in between sessions. Can be None.
     last_location_update: Mapped[int] = mapped_column(BigInteger(), nullable = True, default = None)
 
-    """TODO: Objects that pertain to a single session of connection. Migrate these to a separate Player model that is dependant on the SocketIO connection, and as such is
-    deleted if that connection is lost."""
-    # The request session ID/socket ID associated with SocketIO. When this is not None, the User is connected to the world. Can be None, indicating the User is not playing.
-    socket_id: Mapped[str] = mapped_column(String(32), nullable = True, default = None)
-    # The ID of the vehicle currently in use by this User. Can be None.
-    current_vehicle_id: Mapped[int] = mapped_column(ForeignKey("user_vehicle.id", ondelete = "SET NULL", use_alter = True), nullable = True)
-    # The vehicle currently in use by this User. Can be None.
-    current_vehicle: Mapped[UserVehicle] = relationship(
-        primaryjoin = current_vehicle_id == UserVehicle.id,
-        post_update = True,
-        uselist = False)
-
+    # The User's current game session, if any. This can be None.
+    player_: Mapped[UserPlayer] = relationship(
+        back_populates = "user",
+        uselist = False,
+        cascade = "all, delete")
     # All Track comments posted by this User, as a dynamic relationship. Unordered.
     track_comments_: Mapped[List[TrackComment]] = relationship(
         back_populates = "user",
@@ -930,7 +992,6 @@ class User(UserMixin, db.Model, HasUUIDMixin):
     vehicles_: Mapped[List[UserVehicle]] = relationship(
         back_populates = "user",
         uselist = True,
-        primaryjoin = id == UserVehicle.user_id,
         lazy = "dynamic",
         cascade = "all, delete")
     # This User's tracks, as a dynamic relationship. Unordered.
@@ -967,8 +1028,8 @@ class User(UserMixin, db.Model, HasUUIDMixin):
 
     @property
     def player(self):
-        """Return the world Player. For now, it is just the User itself."""
-        return self
+        """Return the world Player."""
+        return self.player_
 
     @property
     def location_history(self):
@@ -988,6 +1049,13 @@ class User(UserMixin, db.Model, HasUUIDMixin):
     def all_vehicles(self):
         """Return a list of all Vehicles belonging to this User."""
         return self.vehicles.all()
+    
+    @property
+    def current_vehicle(self):
+        """Returns the Vehicle in use by this User's Player, or None if there is no Player."""
+        if not self.has_player:
+            return None
+        return self.player.current_vehicle
     
     @property
     def is_profile_setup(self):
@@ -1021,30 +1089,56 @@ class User(UserMixin, db.Model, HasUUIDMixin):
         return self.ongoing_race_
     
     @property
+    def has_player(self):
+        """Returns True if this User has a Player instance."""
+        return self.player_ != None
+    
+    @property
     def is_playing(self):
         """Returns True if the User is currently in the world. This will return True when the User currently has a socket ID set, and a location update
         has been received from them in the last minute."""
-        return self.socket_id != None and (self.last_location_update != None and time.time()-self.last_location_update < 60)
+        return self.has_player and self.player_.is_playing
 
     def add_location(self, location):
         """Adds this location to the User's history."""
         self.location_history_.append(location)
 
-    def set_socket_session(self, sid):
-        """Set this User's socket session to the latest one."""
-        self.socket_id = sid
+    def set_player(self, new_player):
+        """Set the current Player for this User to the one given. This function will fail if a Player is already set, so be sure to call clear players
+        everytime you wish to install a new one."""
+        if self.has_player:
+            raise ValueError(f"Attempt to set Player for {self} failed because this User already has a Player configured.")
+        # Otherwise, set the player.
+        self.player_ = new_player
+
+    def clear_player(self):
+        """Clear the User's current Player. If None, nothing will happen."""
+        if self.has_player:
+            # If the existing player is not yet in the deleted list, delete it first.
+            if not self.player_ in db.session.deleted:
+                db.session.delete(self.player_)
+            self.player_ = None
     
     def set_last_location_update(self, last_timestamp_s = time.time()):
-        """Set the timestamp, in seconds, when the last location update was received."""
+        """Set the timestamp, in seconds, when the last location update was received. This will set the last location update on both this User instance,
+        and if any, the current Player instance."""
         self.last_location_update = last_timestamp_s
+        if self.has_player:
+            self.player_.set_last_location_update(last_timestamp_s)
 
-    def clear_socket_session(self):
-        """Clear the User's socket session."""
-        self.socket_id = None
+    def set_current_vehicle(self, vehicle):
+        """Set this User's current vehicle to the one given. This function will only succeed if the User currently has a Player."""
+        if not self.has_player:
+            """TODO: handle this case, when User does not have a Player."""
+            raise NotImplementedError("Failed to set_current_vehicle() on User - they do not have a Player.")
+        self.player_.set_current_vehicle(vehicle)
 
     def clear_current_vehicle(self):
-        """Clear the User's current Vehicle."""
-        self.current_vehicle = None
+        """Clear the User's current Vehicle. This function will only succeed if the User currently has a Player."""
+        if not self.has_player:
+            """TODO: handle this case, when User does not have a Player."""
+            raise NotImplementedError("Failed to clear_current_vehicle() on User - they do not have a Player.")
+        self.player_.clear_current_vehicle()
 
     def set_email_address(self, email_address):
         """Set this User's email address."""
@@ -1061,10 +1155,6 @@ class User(UserMixin, db.Model, HasUUIDMixin):
     def add_vehicle(self, vehicle):
         """Add a vehicle to this User's vehicles list."""
         self.vehicles_.append(vehicle)
-
-    def set_current_vehicle(self, vehicle):
-        """Set this User's current vehicle to the one given."""
-        self.current_vehicle = vehicle
         
     def update_password(self, new_password):
         """Update this User's password to the given text. This function will call for password verification."""
@@ -1142,8 +1232,13 @@ class User(UserMixin, db.Model, HasUUIDMixin):
         return query.first()
 
 
+class AnonymousUser(AnonymousUserMixin):
+    """Another User model specifically for managing and tracking unauthenticated Users."""
+    pass
+
+
 class ServerConfiguration(db.Model):
-    """"""
+    """A model that represents the current global configuration for the entire server."""
     __tablename__ = "server_configuration"
 
     id: Mapped[int] = mapped_column(primary_key = True)
