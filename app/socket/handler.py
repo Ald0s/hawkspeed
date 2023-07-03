@@ -105,9 +105,15 @@ class WorldNamespace(Namespace):
             request_connect_authentication = request_connect_auth_schema.load(auth_j)
             # Check to see if the current User currently has a Player. If they do, disconnect that version and clear it.
             if current_user.has_player:
-                # We have an existing player on this User; it must go. Call disconnect on it. This will invoke the disconnection event handler, which will set this to None.
+                # We have an existing player on this User; it must go. Call via socketio, but also explicitly call the disconnect function.
                 LOG.warning(f"User {current_user} has joined the HawkSpeed world (on sid {request.sid}), but is apparently already connected via SocketID {current_user.player.socket_id}.")
                 disconnect(sid = current_user.player.socket_id)
+                # Try calling the disconnect function and handle, by passing, all exceptions related to there being no socket.
+                try:
+                    self.on_disconnect(disconnecting_sid = current_user.player.socket_id)
+                except AttributeError as ae:
+                    # Attribute error here usually means that there is no player (existing connection closed.)
+                    pass
             # We'll now create a new Player instance for the incoming User.
             new_player = world.create_player_session(current_user, request.sid, request_connect_authentication)
             # Parse the player's join request, getting back a result.
@@ -138,7 +144,9 @@ class WorldNamespace(Namespace):
     def on_disconnect(self, **kwargs):
         """Called when the client has disconnected from the server, or if the server has disconnected the client. Either way, this function will clean the User's session up."""
         try:
-            LOG.debug(f"A User ({current_user}, sid={request.sid}) has disconnected from the world!")
+            disconnecting_sid = kwargs.get("disconnecting_sid", request.sid)
+
+            LOG.debug(f"A User ({current_user}, sid={disconnecting_sid}) has disconnected from the world!")
             # Check whether the User currently has a Player.
             if current_user.has_player:
                 # Does User have an ongoing race? If so, disqualify it.

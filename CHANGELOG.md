@@ -46,3 +46,6 @@
 * Implemented disqualified extra info on TrackUserRace,
 * Once again modified exception/error handling in sockets, this time providing a totally separate type of error and getting rid of severity,
 * Created frontend blueprint stub,
+
+## Version 0.00.07
+* Fixed bug where improper shutdown of server causes persistence of old UserPlayer instances, and this results in failure to reconnect,

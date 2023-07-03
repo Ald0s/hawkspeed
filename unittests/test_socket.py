@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta
 from flask import url_for
 from unittests.conftest import BaseMockLoginCase
 
-from app import db, config, models, error, factory, socketio
+from app import db, config, models, error, world, factory, socketio
 
 
 class TestSocket(BaseMockLoginCase):
@@ -68,13 +68,63 @@ class TestSocket(BaseMockLoginCase):
             # Ensure the socket is NOT connected.
             self.assertEqual(socket.is_connected(), False)
 
-    '''def test_player_connect_disconnect(self):
+    def test_player_connect_disconnect(self):
         """"""
         self.assertEqual(True, False)
         
     def test_player_connect_then_reconnect(self):
-        """"""
-        self.assertEqual(True, False)
+        """Ensure that a User can successfully overtake an existing Player connection if they reconnect while that connection is still active."""
+        # Create a new User.
+        aldos = factory.create_user("alden@mail.com", "password",
+            username = "alden", vehicle = "1994 Toyota Supra")
+        db.session.flush()
+        # Authenticate the User.
+        with self.app.test_client(user = aldos) as client:
+            # Launch a socket to join the world.
+            join_world_d = dict(
+                device_fid = uuid.uuid4().hex.lower(), latitude = -37.782737, longitude = 145.013383, rotation = 180.0, speed = 70.0, logged_at = time.time() * 1000)
+            socket = socketio.test_client(self.app,
+                flask_test_client = client, auth = join_world_d)
+            # Ensure the socket is connected.
+            self.assertEqual(socket.is_connected(), True)
+            # Get the current world sessions SID, and save it.
+            current_sid = aldos.player.socket_id
+            # Create another socket from this client, toward the world namespace.
+            socket2 = socketio.test_client(self.app,
+                flask_test_client = client, auth = join_world_d)
+            # Ensure the second socket is connected and the first socket is no longer connected.
+            self.assertEqual(socket2.is_connected(), True)
+            self.assertEqual(socket.is_connected(), False)
+            # Now, ensure the SID is not equal to the current SID.
+            self.assertNotEqual(current_sid, aldos.player.socket_id)
+
+    def test_player_connect_dirty_player_attribute(self):
+        """Ensure that a User can successfully overtake an existing Player instance that still may be set on their Player, but for which there are no open connections."""
+        # Create a new User.
+        aldos = factory.create_user("alden@mail.com", "password",
+            username = "alden", vehicle = "1994 Toyota Supra")
+        db.session.flush()
+        # Create a join world dictionary.
+        join_world_d = world.RequestConnectAuthentication(
+                device_fid = uuid.uuid4().hex.lower(), latitude = -37.782737, longitude = 145.013383, rotation = 180.0, speed = 70.0, logged_at = time.time() * 1000)
+        # Create a dirty UserPlayer instance for this User and add it to session.
+        _, dirty_user_player = self.make_user_player(aldos, join_world_d)
+        db.session.add(dirty_user_player)
+        db.session.flush()
+        # Save dirty socket ID.
+        dirty_socket_id = dirty_user_player.socket_id
+        # Authenticate the User.
+        with self.app.test_client(user = aldos) as client:
+            # Launch a socket to join the world with a new join world dict, but same FID etc.
+            join_world_d = dict(
+                device_fid = uuid.uuid4().hex.lower(), latitude = -37.782737, longitude = 145.013383, rotation = 180.0, speed = 70.0, logged_at = (time.time() * 1000)+5000)
+            socket = socketio.test_client(self.app,
+                flask_test_client = client, auth = join_world_d)
+            # Ensure the socket is connected.
+            self.assertEqual(socket.is_connected(), True)
+            # Get clean socket ID and ensure it is not equal to dirty.
+            db.session.refresh(aldos)
+            self.assertNotEqual(aldos.player.socket_id, dirty_socket_id)
 
     def test_start_cancel_race(self):
         """"""
@@ -118,4 +168,4 @@ class TestSocket(BaseMockLoginCase):
             self.assertEqual(aldos.has_ongoing_race, True)
             # Cancel the race.
             cancel_race_result = socket.emit("cancel_race", {},
-                callback = True)'''
+                callback = True)
