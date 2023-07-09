@@ -49,3 +49,16 @@
 
 ## Version 0.00.07
 * Fixed bug where improper shutdown of server causes persistence of old UserPlayer instances, and this results in failure to reconnect,
+
+## Version 0.01.00
+* Added support for pagination filters on both track comments and track leaderboard,
+* Added laps to Track, and functions for setting track as circuit or sprint, added num laps complete and percent complete to TrackUserRace, added also to race update schema and viewmodel where applicable,
+* Updated races::_update_race_averages to update percent complete for Sprints,
+* Implemented tracks::has_user_finished and tracks::get_track_comment,
+* Began implementing Celery for background tasks; we'll be using Redis for our message broker,
+* Added requests for access to Google API,
+* Added basic tasks module, for eventual Celery integration,
+* Added Google Maps API integration, utilising Snap To Roads API as optional part of the User track verification process and wrote some of the required tests for the module,
+* Creating new track now immediately returns its full path, if the track is verified straight away, otherwise null is returned in place of the path,
+* Added fake attribute to user race attempts for allowing unproven leaderboard entries - strictly only in dev environments,
+* Split track verififcation into; verification (for admin approvals) and snapped_to_road (for ensuring tracks are snapped if required).

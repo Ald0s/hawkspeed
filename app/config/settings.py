@@ -2,12 +2,29 @@ import os
 from instance import settings as private
 
 
+class CeleryConfig():
+    # A boolean; set to True to enable Google Maps API functionality. Note; setting this to False will skip the 'snap to roads' verification step that
+    # is usually part of the new track process.
+    USE_GOOGLE_MAPS_API = False
+    # The base URL for the Snap To Roads API.
+    SNAP_TO_ROADS_BASE_URL = "https://roads.googleapis.com/v1/snapToRoads?"
+    # The number of points that can be sent in a single batch to Roads API snap to road. Maximum is 100 as per API docs.
+    NUM_POINTS_PER_SNAP_BATCH = 100
+
+
 class SocketConfig():
     SOCKETIO_MESSAGE_QUEUE = "redis://"
     SOCKETIO_PATH = "socket.io"
     SOCKETIO_ENGINEIO_LOGGER = False
     # True if, universally, updates should be sent via the SocketIO system where applicable.
     SHOULD_SEND_SOCKETIO_UPDATES = True
+
+
+class TrackConfigurationMixin():
+    # A boolean; set to True to require snap-to-roads be executed prior to verification of a new Track.
+    REQUIRE_SNAP_TO_ROADS = False
+    # A boolean; set to True to require admin approvals for new tracks, after they've been snapped to road.
+    REQUIRE_ADMIN_APPROVALS = False
 
 
 class RaceConfigurationMixin():
@@ -30,7 +47,7 @@ class GeospatialConfigurationMixin():
     NUM_METERS_PLAYER_PROXIMITY = 150
 
 
-class BaseConfig(private.PrivateBaseConfig, RaceConfigurationMixin, GeospatialConfigurationMixin, SocketConfig):
+class BaseConfig(private.PrivateBaseConfig, RaceConfigurationMixin, TrackConfigurationMixin, GeospatialConfigurationMixin, SocketConfig, CeleryConfig):
     TESTING = False
     DEBUG = False
     SQLALCHEMY_SESSION_OPTS = {}
@@ -46,8 +63,8 @@ class BaseConfig(private.PrivateBaseConfig, RaceConfigurationMixin, GeospatialCo
     #SERVER_NAME = f"127.0.0.1:{PORT}"
     SERVER_URL = "http://192.168.0.253:5000"
 
-    SERVER_VERSION_TEXT = "0.00.07"
-    SERVER_VERSION_CODE = 7
+    SERVER_VERSION_TEXT = "0.01.00"
+    SERVER_VERSION_CODE = 8
 
     # Streaming configuration.
     MAX_CONTENT_LENGTH = 16 * 1024 * 1024 # 16 MB

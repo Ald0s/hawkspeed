@@ -61,13 +61,20 @@ def import_gpx_routes(server_configuration, **kwargs):
     db.session.commit()
 
 
+@application.cli.command("show-users", help = "")
+def show_users():
+    users = db.session.query(models.User)\
+        .all()
+    for user in users:
+        print(f"{user}: {user.username}")
+
+
 @application.cli.command("show-tracks", help = "")
 def show_tracks():
     tracks = db.session.query(models.Track)\
         .all()
     for track in tracks:
-        print(track)
-        track.uid
+        print(f"{track}: {track.uid}")
 
 
 @application.cli.command("set-verified", help = "")
@@ -121,6 +128,36 @@ def create_user(email_address, password, username, drive, privilege, enabled, ve
         privilege = privilege, enabled = enabled, verified = verified, username = username, vehicle = drive)
     LOG.debug(f"Created new user '{new_user}'!")
     db.session.commit()
+
+
+@application.cli.command("add-fake-attempt", help = "Create a fake race attempt on the given track, by the given User; for the given time, in milliseconds.")
+@click.argument("track_uid")
+@click.argument("username")
+@click.argument("started")
+@click.argument("finished")
+def create_user(track_uid, username, started, finished):
+    # Find User.
+    user = models.User.search(username = username)
+    if not user:
+        raise Exception(f"Failed to add fake race attempt, no user with username {username} could be found.")
+    # Ensure the user has at least one vehicle.
+    if not user.num_vehicles:
+        raise Exception(f"Failed to add fake race attempt for {user}, that user has no vehicles.")
+    # Find Track.
+    track = tracks.find_existing_track(track_uid = track_uid)
+    if not track:
+        raise Exception(f"Failed to add fake race attempt for {user}, the requested track with UID {track_uid} does not exist.")
+    if finished < started:
+        raise Exception(f"Failed to add fake race attempt for {user}, the given time starts after its supposed to finish.")
+    track_user_race = models.TrackUserRace(
+            started = started)
+    track_user_race.set_fake(True)
+    track_user_race.set_finished(finished)
+    track_user_race.set_vehicle(user.vehicles.first())
+    track_user_race.set_track_and_user(track, user)
+    db.session.add(track_user_race)
+    db.session.commit()
+    LOG.debug(f"Added fake race attempt for {user}; {track_user_race}")
 
 
 @application.cli.command("gpx2json", help = "Convert a GPX file to JSON.")

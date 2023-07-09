@@ -561,12 +561,16 @@ class TrackViewModel(BaseViewModel):
         top_leaderboard     = SerialiseViewModelListField(required = True, allow_none = False)
 
         ### Second, state data. ###
+        # Is the track verified yet? Can't be None.
+        is_verified         = fields.Bool(required = True, allow_none = False)
+        # Is the track snapped to roads? Can't be None.
+        is_snapped_to_roads = fields.Bool(required = True, allow_none = False)
         # The track's start point. Can't be None.
         start_point         = fields.Nested(tracks.TrackPointSchema, many = False, required = True, allow_none = False)
-        # Is this track verified? Can't be None.
-        is_verified         = fields.Bool(required = True, allow_none = False)
         # What type if this track? Can't be None.
         track_type          = fields.Int(required = True, allow_none = False)
+        # Applicable only to Circuit type tracks, the number of laps required. Can be None.
+        num_laps_requried   = fields.Int(required = True, allow_none = True)
         # This track's ratings. Can't be None.
         ratings             = fields.Nested(tracks.RatingsSchema, many = False, allow_none = False)
         # The actor's disposition toward the Track, can be None; which means the actor has not voted.
@@ -619,6 +623,16 @@ class TrackViewModel(BaseViewModel):
         return TrackPathViewModel(self.actor, self.patient.path)
 
     @property
+    def is_verified(self):
+        """Return True if the track has been verified."""
+        return self.patient.is_verified
+    
+    @property
+    def is_snapped_to_roads(self):
+        """Return True if the track has been snapped to roads."""
+        return self.patient.is_snapped_to_roads
+    
+    @property
     def start_point(self):
         """Return a dictionary, containing the longitude and latitude (in 4326) of the first point."""
         """TODO: improve this, return an object instead of a dictionary."""
@@ -631,14 +645,14 @@ class TrackViewModel(BaseViewModel):
             raise e
 
     @property
-    def is_verified(self):
-        """Return True if this track is verified."""
-        return self.patient.is_verified
-
-    @property
     def track_type(self):
         """Returns the type of this track."""
         return self.patient.track_type
+    
+    @property
+    def num_laps_requried(self):
+        """Returns the number of laps required."""
+        return self.patient.num_laps_required
     
     @property
     def ratings(self):
@@ -657,8 +671,10 @@ class TrackViewModel(BaseViewModel):
 
     @property
     def can_race(self):
-        """TODO"""
-        return True
+        """A boolean that indicates whether the client should allow the User the opportunity to race the track. This property will take into account
+        the current User's privileges, and the current state of the Track."""
+        """TODO: check user privileges"""
+        return self.patient.can_be_raced
 
     @property
     def can_edit(self):
@@ -750,13 +766,25 @@ class TrackViewModel(BaseViewModel):
         ---------
         :page: The page to get from the leaderboard.
 
+        Keyword arguments
+        -----------------
+        :num_in_page: The number of items per page. Default is PAGE_SIZE_LEADERBOARD.
+        :filter_: A filter to apply to the query for the leaderboard. Default is None.
+
         Returns
         -------
         A ViewModelPagination object."""
         try:
+            num_in_page = kwargs.get("num_in_page", config.PAGE_SIZE_LEADERBOARD)
+            filter_ = kwargs.get("filter_", None)
+
+            # Build a leaderboard query.
+            leaderboard_q = tracks.leaderboard_query_for(self.patient,
+                filter_ = filter_)
+            # Return a view model pagination list for this query.
             return ViewModelPagination.make(
-                tracks.leaderboard_query_for(self.patient).paginate(
-                    page = page, per_page = config.PAGE_SIZE_LEADERBOARD, max_per_page = config.PAGE_SIZE_LEADERBOARD, error_out = False),
+                leaderboard_q.paginate(
+                    page = page, per_page = num_in_page, max_per_page = num_in_page, error_out = False),
                 self.actor,
                 LeaderboardEntryViewModel)
         except Exception as e:
@@ -770,13 +798,25 @@ class TrackViewModel(BaseViewModel):
         ---------
         :page: The page to get from the comments section.
 
+        Keyword arguments
+        -----------------
+        :num_in_page: The number of items per page. Default is PAGE_SIZE_COMMENTS.
+        :filter_: A filter to apply to the query for the comments. Default is None.
+
         Returns
         -------
         A ViewModelPagination object."""
         try:
+            num_in_page = kwargs.get("num_in_page", config.PAGE_SIZE_COMMENTS)
+            filter_ = kwargs.get("filter_", None)
+
+            # Build a comments query.
+            comments_q = tracks.comments_query_for(self.patient,
+                filter_ = filter_)
+            # Return a view model pagination list for this query.
             return ViewModelPagination.make(
-                tracks.comments_query_for(self.patient).paginate(
-                    page = page, per_page = config.PAGE_SIZE_COMMENTS, max_per_page = config.PAGE_SIZE_COMMENTS, error_out = False),
+                comments_q.paginate(
+                    page = page, per_page = num_in_page, max_per_page = num_in_page, error_out = False),
                 self.actor,
                 TrackCommentViewModel)
         except Exception as e:
@@ -928,20 +968,33 @@ class AccountViewModel(BaseViewModel):
         ---------
         :new_track_json: A JSON object containing all attributes in LoadTrackSchema.
 
+        Keyword arguments
+        -----------------
+        :is_verified: True if this Track should be forced verified and no verification is required. Default is not REQUIRE_ADMIN_APPROVALS.
+        :is_snapped_to_roads: True if this Track is snapped to roads, and so no further work is needed for that. Default is not REQUIRE_SNAP_TO_ROADS.
+
         Returns
         -------
         A TrackViewModel."""
         try:
+            is_verified = kwargs.get("is_verified", not config.REQUIRE_ADMIN_APPROVALS)
+            is_snapped_to_roads = kwargs.get("is_snapped_to_roads", not config.REQUIRE_SNAP_TO_ROADS)
+
             # Check if the User is able to create tracks. Raise an exception if not.
             if not self.can_create_tracks:
                 """TODO: implement this properly."""
                 raise NotImplementedError("Failed to create_track, user is not allowed to; but this is NOT handled.")
-            """
-            TODO: for now, is_verified is True by default since we have no validation procedures.
-            """
-            # Otherwise, use the tracks module to load this JSON object. Expect back a full Track model.
+            # Use the tracks module to load this JSON object. Expect back a full Track model.
             new_track = tracks.create_track_from_json(self.actor, new_track_json,
-                is_verified = True)
+                is_verified = is_verified, is_snapped_to_roads = is_snapped_to_roads)
+            # Now, if snapped to roads is False, we need to send this track for snapping.
+            if not is_snapped_to_roads:
+                """TODO: snap to roads required here, please implement this."""
+                raise NotImplementedError()
+            elif not is_verified:
+                """TODO: admin verification is required. Though, this shouldn't mean much right here, since approval won't be available until snapped
+                to roads anyway."""
+                pass
             # We get this track back. Now, create a new TrackViewModel for it, and return that.
             track_view_model = TrackViewModel(self.actor, new_track)
             return track_view_model

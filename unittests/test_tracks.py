@@ -140,3 +140,26 @@ class TestTracks(BaseCase):
         self.assertEqual(tracks.get_user_rating(track, random_users[len(random_users)-1]), True)
         # Get the rating for aldos, ensure that is None.
         self.assertEqual(tracks.get_user_rating(track, aldos), None)
+
+    def test_has_user_finished(self):
+        """Import an example track; yarra bouelvard and create two example Users.
+        Create 2 TrackUserRace for this track for User1, one finished and one not. Create 2 unsuccessful attempts for User2.
+        Ensure User1 has finished the Track.
+        Ensure User2 has not finished the Track."""
+        # Create 2 random users.
+        user1 = self.get_random_user()
+        user2 = self.get_random_user()
+        # Import a test track.
+        track = self.create_track_from_gpx(user1, "yarra_boulevard.gpx")
+        # Now create one finished track attempt for User 1 and one not finished.
+        self.make_finished_track_user_race(track, user1, 1602762301000, 1602762481000)
+        self.make_track_user_race(track, user1, 1602849301000)
+        # Create two race attempts, both not finished for User2.
+        self.make_track_user_race(track, user2, 1602849901000)
+        self.make_track_user_race(track, user2, 1602850801000)
+        db.session.flush()
+        # Ensure that User1 has finished track at least once.
+        self.assertEqual(tracks.has_user_finished(track, user1), True)
+        # Ensure that User2 has not finished the track.
+        self.assertEqual(tracks.has_user_finished(track, user2), False)
+       

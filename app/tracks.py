@@ -2,16 +2,14 @@
 import logging
 import os
 import gpxpy
-import random
 import hashlib
 
 import pyproj
-import geopandas
 import shapely
 from geoalchemy2 import shape
 
-from datetime import datetime, date
-from sqlalchemy import func, asc, desc, delete
+from flask_login import current_user
+from sqlalchemy import func, asc, desc, delete, and_
 from sqlalchemy.orm import with_expression
 from marshmallow import fields, Schema, post_load, EXCLUDE
 
@@ -46,17 +44,42 @@ class TrackInspectionFailed(Exception):
 
 def leaderboard_query_for(track, **kwargs):
     """Return a query for the leaderboard from the given Track. The leaderboard is simply ordered from slowest stopwatch time to fasted stopwatch time. This function
-    will return the query object itself, which can be paginated or received in full.
+    will return the query object itself, which can be paginated or received in full. If our current environment is either LiveDevelopment or Production, this function
+    will not return any race attempts that are flagged as fake. This can't be changed.
 
     Arguments
     ---------
-    :track: An instance of Track."""
+    :track: An instance of Track.
+    
+    Keyword arguments
+    -----------------
+    :filter_: The filter to apply. If 'my' only current User's leaderboard items will be returned, otherwise if None or not recognised, no filter."""
     try:
+        filter_ = kwargs.get("filter_", None)
+        
+        if config.APP_ENV == "Production" or config.APP_ENV == "LiveDevelopment":
+            filter_fake_attempts = True
+        else:
+            filter_fake_attempts = False
         # Employ a query_expression / with_expression option on this query, to fill in the place in the leaderboard for each race outcome.
         # We will only include races that are confirmed finished in this query.
         leaderboard_q = db.session.query(models.TrackUserRace)\
             .filter(models.TrackUserRace.is_finished == True)\
-            .filter(models.TrackUserRace.track_id == track.id)\
+            .filter(models.TrackUserRace.track_id == track.id)
+        # If filter is equal t 'my', apply a filter for only current User's attempts.
+        if filter_ == "my":
+            if current_user.is_authenticated:
+                # If we are authenticated, attach a filter on the User ID associated with the track, too.
+                leaderboard_q = leaderboard_q\
+                    .filter(models.TrackUserRace.user_id == current_user.id)
+            else:
+                LOG.warning(f"Did not attach the 'my' filter to a query for a track's leaderboard because the current User is not authenticated.")
+        # If filter fake attempts is True, require fake column to be False.
+        if filter_fake_attempts:
+            leaderboard_q = leaderboard_q\
+                .filter(models.TrackUserRace.fake == False)
+        # Attach order by and query expression for finishing place.
+        leaderboard_q = leaderboard_q\
             .order_by(asc(models.TrackUserRace.stopwatch))\
             .options(
                 with_expression(models.TrackUserRace.finishing_place,
@@ -153,16 +176,38 @@ def get_ratings_for(track, **kwargs) -> Ratings:
     
 
 def has_user_finished(track, user, **kwargs) -> bool:
-    """"""
+    """Check if the given User has successfully completed the given Track at least once.
+    
+    Arguments
+    ---------
+    :track: The Track from which to search finished race attempts.
+    :user: The User to check finished races for.
+    
+    Returns
+    -------
+    Returns True if the User has successfully finished the given Track at least once."""
     try:
-        """TODO: perform query that searches for all track user race that refers to this User, and that is finished. Return True if length is >0"""
-        return False
+        finished_race_count = db.session.query(func.count(models.TrackUserRace.uid))\
+            .filter(and_(models.TrackUserRace.track_id == track.id, models.TrackUserRace.user_id == user.id))\
+            .filter(models.TrackUserRace.is_finished)\
+            .scalar()
+        # Return True if count is greater than 0.
+        return finished_race_count > 0
     except Exception as e:
         raise e
     
     
 def get_track_comment(track, comment_uid, **kwargs) -> models.TrackComment:
-    """"""
+    """Locate a track's comment by the given UID.
+    
+    Arguments
+    ---------
+    :track: The Track from which to search for the comment.
+    :comment_uid: The UID for the comment to search for.
+    
+    Returns
+    -------
+    Returns an instance of TrackComment."""
     try:
         return db.session.query(models.TrackComment)\
             .join(models.Track, models.Track.id == models.TrackComment.track_id)\
@@ -292,6 +337,8 @@ class LoadedPoint():
 
 class LoadPointSchema(Schema):
     """A schema for loading a basic point without any User data."""
+    class Meta:
+        unknown = EXCLUDE
     latitude                = fields.Decimal(as_string = True)
     longitude               = fields.Decimal(as_string = True)
 
@@ -302,6 +349,8 @@ class LoadPointSchema(Schema):
 
 class LoadUserPointSchema(Schema):
     """A schema for loading a point with User data."""
+    class Meta:
+        unknown = EXCLUDE
     latitude                = fields.Decimal(as_string = True)
     longitude               = fields.Decimal(as_string = True)
     logged_at               = fields.Int(required = True, allow_none = False)
@@ -332,6 +381,8 @@ class LoadedTrackSegment():
 
 class LoadTrackSegmentSchema(Schema):
     """A schema for loading a basic track segment; without User data."""
+    class Meta:
+        unknown = EXCLUDE
     points                  = fields.List(fields.Nested(LoadPointSchema, many = False))
 
     @post_load
@@ -341,6 +392,8 @@ class LoadTrackSegmentSchema(Schema):
 
 class LoadUserTrackSegmentSchema(Schema):
     """A schema for loading a User track segment; with User data."""
+    class Meta:
+        unknown = EXCLUDE
     points                  = fields.List(fields.Nested(LoadUserPointSchema, many = False))
 
     @post_load
@@ -390,6 +443,8 @@ class LoadedUserTrack(LoadedTrack):
 
 class LoadTrackSchema(Schema):
     """A schema for loading a basic track; without User data."""
+    class Meta:
+        unknown = EXCLUDE
     name                    = fields.Str()
     description             = fields.Str()
     track_type              = fields.Int()
@@ -402,6 +457,8 @@ class LoadTrackSchema(Schema):
 
 class LoadUserTrackSchema(Schema):
     """A schema for loading a User track schema, with User data attached to it."""
+    class Meta:
+        unknown = EXCLUDE
     name                    = fields.Str()
     description             = fields.Str()
     track_type              = fields.Int()
@@ -439,11 +496,13 @@ def create_user_track_from_json(user, new_track_json, **kwargs) -> CreatedUserTr
     Keyword arguments
     -----------------
     :should_validate: Should the data given by the new track be validated to ensure the User didn't intentionally screw anything up? Default is False.
-    :is_verified: Should the created track be set verified? Default is False.
+    :is_verified: Whether this track is verified, that is, it does not need admin approval. Default is not REQUIRE_ADMIN_APPROVALS.
+    :is_snapped_to_roads: Whether this track is snapped to roads. Default is not REQUIRE_SNAP_TO_ROADS.
     :intersection_check: Whether to run the track intersection check at all. Default is True."""
     try:
         should_validate = kwargs.get("should_validate", False)
-        is_verified = kwargs.get("is_verified", False)
+        is_verified = kwargs.get("is_verified", not config.REQUIRE_ADMIN_APPROVALS)
+        is_snapped_to_roads = kwargs.get("is_snapped_to_roads", not config.REQUIRE_SNAP_TO_ROADS)
         intersection_check = kwargs.get("intersection_check", True)
 
         # Construct a LoadTrackSchema and load the given JSON.
@@ -457,7 +516,7 @@ def create_user_track_from_json(user, new_track_json, **kwargs) -> CreatedUserTr
             _validate_loaded_user_track(loaded_user_track)
         # Finally, create the track, receiving back a created track object.
         created_track = create_track(loaded_user_track,
-            is_verified = is_verified, intersection_check = intersection_check)
+            is_verified = is_verified, is_snapped_to_roads = is_snapped_to_roads, intersection_check = intersection_check)
         # Now, associate the track with the given User above.
         created_track.set_owner(user)
         # Finally, create and return a created user track.
@@ -490,14 +549,16 @@ def create_track_from_json(new_track_json, **kwargs) -> CreatedTrack:
 
     Keyword arguments
     -----------------
-    :is_verified: Should the created track be set verified? Default is True since is the None-User route.
+    :is_verified: Whether this track is verified, that is, it does not need admin approval. Default is not REQUIRE_ADMIN_APPROVALS.
+    :is_snapped_to_roads: Whether this track is snapped to roads. Default is not REQUIRE_SNAP_TO_ROADS.
     :intersection_check: Whether to run the track intersection check at all. Default is True.
     
     Returns
     -------
     An instance of CreatedTrack, which contains the created track."""
     try:
-        is_verified = kwargs.get("is_verified", True)
+        is_verified = kwargs.get("is_verified", not config.REQUIRE_ADMIN_APPROVALS)
+        is_snapped_to_roads = kwargs.get("is_snapped_to_roads", not config.REQUIRE_SNAP_TO_ROADS)
         intersection_check = kwargs.get("intersection_check", True)
 
         # Construct a LoadTrackSchema and load the given JSON.
@@ -508,7 +569,7 @@ def create_track_from_json(new_track_json, **kwargs) -> CreatedTrack:
             raise NotImplementedError("Failed to create_track_from_json(), a User data track was passed- please use the User specific function.")
         # We can't properly validate this track, since there is no User data attached. Call out to create track with the loaded track and return its result.
         return create_track(loaded_track,
-            is_verified = is_verified, intersection_check = intersection_check)
+            is_verified = is_verified, is_snapped_to_roads = is_snapped_to_roads, intersection_check = intersection_check)
     except TrackInspectionFailed as tif:
         raise tif
     except Exception as e:
@@ -518,7 +579,8 @@ def create_track_from_json(new_track_json, **kwargs) -> CreatedTrack:
 def create_track_from_gpx(filename, **kwargs) -> CreatedTrack:
     """Create a Track from a GPX file. Provide the filename, as well as a directory relative to the working directory. The GPX contents will be read
     and parsed to produce a JSON object, which will then be used to produce a loaded track instance, which will then be passed to the create track
-    function. All tracks loaded with this function will be loaded as non-User tracks.
+    function. All tracks loaded with this function will be loaded as non-User tracks. This is a relatively secure function and as such, created tracks
+    will be entered as though they are verified and snapped to roads (by default.)
 
     Arguments
     ---------
@@ -527,7 +589,8 @@ def create_track_from_gpx(filename, **kwargs) -> CreatedTrack:
     Keyword arguments
     -----------------
     :relative_dir: A directory relative to the working directory. By default, the configured GPX_ROUTES_DIR.
-    :is_verified: Whether this track is verified, that is, it does not need to be checked/pruned prior to use by Users. Default is True.
+    :is_verified: Whether this track is verified, that is, it does not need admin approval. Default is True.
+    :is_snapped_to_roads: Whether this track is snapped to roads. Default is True.
     :intersection_check: Whether to run the track intersection check at all. Default is True.
     
     Returns
@@ -536,6 +599,7 @@ def create_track_from_gpx(filename, **kwargs) -> CreatedTrack:
     try:
         relative_dir = kwargs.get("relative_dir", config.GPX_ROUTES_DIR)
         is_verified = kwargs.get("is_verified", True)
+        is_snapped_to_roads = kwargs.get("is_snapped_to_roads", True)
         intersection_check = kwargs.get("intersection_check", True)
 
         # Assemble the absolute path.
@@ -561,7 +625,7 @@ def create_track_from_gpx(filename, **kwargs) -> CreatedTrack:
             ]) for segment in gpx.tracks[0].segments]}
         # We'll now return the result of loading this JSON dictionary from JSON.
         return create_track_from_json(new_track_json,
-            is_verified = is_verified, intersection_check = intersection_check)
+            is_verified = is_verified, is_snapped_to_roads = is_snapped_to_roads, intersection_check = intersection_check)
     except Exception as e:
         raise e
 
@@ -577,14 +641,16 @@ def create_track(loaded_track, **kwargs) -> CreatedTrack:
 
     Keyword arguments
     -----------------
-    :is_verified: Whether this track is verified, that is, it does not need to be checked/pruned prior to use by Users.
+    :is_verified: Whether this track is verified, that is, it does not need admin approval. Default is not REQUIRE_ADMIN_APPROVALS.
+    :is_snapped_to_roads: Whether this track is snapped to roads. Default is not REQUIRE_SNAP_TO_ROADS.
     :intersection_check: Whether to run the track intersection check at all. Default is True.
     
     Returns
     -------
     An instance of CreatedTrack, containing the track and its path."""
     try:
-        is_verified = kwargs.get("is_verified", False)
+        is_verified = kwargs.get("is_verified", not config.REQUIRE_ADMIN_APPROVALS)
+        is_snapped_to_roads = kwargs.get("is_snapped_to_roads", not config.REQUIRE_SNAP_TO_ROADS)
         intersection_check = kwargs.get("intersection_check", True)
 
         # Search for the track's hash in all existing Tracks. If existing, raise an error.
@@ -609,8 +675,16 @@ def create_track(loaded_track, **kwargs) -> CreatedTrack:
         # Set all basic details on the track.
         new_track.set_name(loaded_track.name)
         new_track.set_description(loaded_track.description)
-        new_track.set_track_type(loaded_track.track_type)
+        # Set the appropriate track type.
+        if loaded_track.track_type == models.Track.TYPE_SPRINT:
+            new_track.set_sprint()
+        elif loaded_track.track_type == models.Track.TYPE_CIRCUIT:
+            """TODO: complete circuit type."""
+            raise NotImplementedError("Failed to create a new track, CIRCUIT types are not yet supported.")
+        else:
+            raise NotImplementedError(f"Failed to create a new track, track type integer {loaded_track.track_type} is not recognised as a track type.")
         new_track.set_verified(is_verified)
+        new_track.set_snapped_to_roads(is_snapped_to_roads)
         new_track.set_path(track_path)
         # We will use the very first point from the very first segment to represent the start point. So set this as the position on the Track.
         start_point = loaded_track.start_point

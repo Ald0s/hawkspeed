@@ -45,6 +45,20 @@ A race track may be recorded (right now) anywhere, as long as the Player has per
 
 This project represents the backend server portion of the system. It is built on Flask Microframework, supported by a PostgreSQL database through SQLAlchemy ORM. PostgreSQL is used alongside the PostGIS extension (made available via Geoalchemy.) Alternatively, you can use SQLite w/ Spatialite for tests and development, though it's annoying to get spatialite so I'd recommend stick with Post.
 
+The following packages are used:
+* Flask,
+* Flask-Login,
+* Flask-SocketIO,
+* Flask-Migrate,
+* SQLAlchemy,
+* GeoAlchemy2,
+* Shapely,
+* PyProj,
+* Psycopg2,
+* Eventlet,
+* Gunicorn,
+* Marshmallow.
+
 ## Installation
 ```
 # Clone the repo and change to dir root.

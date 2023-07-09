@@ -1,5 +1,6 @@
 import time
 import uuid
+import math
 import logging
 import pytz
 import json
@@ -84,17 +85,24 @@ class EPSGWrapperMixin():
         if not self.crs:
             return None
         return pyproj.crs.CRS.from_user_input(self.crs)
-
+    
+    @property
+    def geodetic_crs_object(self):
+        if not self.crs_object:
+            return None
+        return self.crs_object.geodetic_crs
+    
     @property
     def geodetic_transformer(self):
-        return pyproj.Transformer.from_crs(self.crs_object, self.crs_object.geodetic_crs, always_xy = True)
+        return pyproj.Transformer.from_crs(self.crs_object, self.geodetic_crs_object, always_xy = True)
 
     @declared_attr
     def crs(cls) -> Mapped[int]:
-        #return db.Column(db.Integer, nullable = True, default = None)
         return mapped_column(nullable = True, default = None)
 
     def set_crs(self, crs):
+        if isinstance(crs, pyproj.crs.CRS):
+            crs = crs.to_epsg()
         self.crs = crs
 
 
@@ -107,7 +115,7 @@ class PointGeometryMixin(EPSGWrapperMixin):
     @declared_attr
     def point_geom(self):
         """Represents a column for a geometry of type Point that defines the center/position of this object."""
-        return db.Column(Geometry("POINT", srid = config.WORLD_CONFIGURATION_CRS, management = config.POSTGIS_MANAGEMENT))
+        return db.Column(Geometry("POINT", srid = config.WORLD_CONFIGURATION_CRS))
 
     @property
     def point(self) -> geometry.Point:
@@ -153,7 +161,7 @@ class PolygonGeometryMixin(EPSGWrapperMixin):
     @declared_attr
     def polygon_geom(self):
         """Represents a column for a geometry of type Polygon"""
-        return db.Column(Geometry("POLYGON", srid = config.WORLD_CONFIGURATION_CRS, management = config.POSTGIS_MANAGEMENT))
+        return db.Column(Geometry("POLYGON", srid = config.WORLD_CONFIGURATION_CRS))
 
     @property
     def polygon(self) -> geometry.Polygon:
@@ -185,7 +193,7 @@ class MultiPolygonGeometryMixin(EPSGWrapperMixin):
     @declared_attr
     def multi_polygon_geom(self):
         """Represents a column for a geometry of type MultiPolygon"""
-        return db.Column(Geometry("MULTIPOLYGON", srid = config.WORLD_CONFIGURATION_CRS, management = config.POSTGIS_MANAGEMENT))
+        return db.Column(Geometry("MULTIPOLYGON", srid = config.WORLD_CONFIGURATION_CRS))
 
     @property
     def multi_polygon(self) -> geometry.MultiPolygon:
@@ -217,7 +225,7 @@ class LineStringGeometryMixin(EPSGWrapperMixin):
     @declared_attr
     def linestring_geom(self):
         """Represents a column for a geometry of type LineString."""
-        return db.Column(Geometry("LINESTRING", srid = config.WORLD_CONFIGURATION_CRS, management = config.POSTGIS_MANAGEMENT))
+        return db.Column(Geometry("LINESTRING", srid = config.WORLD_CONFIGURATION_CRS))
 
     @property
     def linestring(self) -> geometry.LineString:
@@ -249,7 +257,7 @@ class MultiLineStringGeometryMixin(EPSGWrapperMixin):
     @declared_attr
     def multi_linestring_geom(self):
         """Represents a column for a geometry of type MultiLineString."""
-        return db.Column(Geometry("MULTILINESTRING", srid = config.WORLD_CONFIGURATION_CRS, management = config.POSTGIS_MANAGEMENT))
+        return db.Column(Geometry("MULTILINESTRING", srid = config.WORLD_CONFIGURATION_CRS))
 
     @property
     def multi_linestring(self) -> geometry.MultiLineString:
@@ -274,6 +282,127 @@ class MultiLineStringGeometryMixin(EPSGWrapperMixin):
         if not self.crs:
             raise AttributeError(f"Could not set geometry for {self}, this object does not have a CRS set!")
         self.multi_linestring = multi_linestring
+
+
+class SnapToRoadTrackPoint(db.Model, PointGeometryMixin):
+    """A model for containing a single track point, uniquely identified by an absolute index."""
+    __tablename__ = "snap_to_road_track_point"
+
+    id: Mapped[int] = mapped_column(primary_key = True)
+    # A foreign key to the snap to road track that owns this point. Cascades such that when snap to road track is deleted, this will be too. Can't be None.
+    snap_to_road_track_id: Mapped[int] = mapped_column(ForeignKey("snap_to_road_track.id", ondelete = "CASCADE"), nullable = False)
+
+    # The absolute index for this point. Can't be None.
+    absolute_idx: Mapped[int] = mapped_column(nullable = False)
+
+    # The track to which this point belongs.
+    snap_to_road_track: Mapped["SnapToRoadTrack"] = relationship(
+        back_populates = "track_points",
+        uselist = False)
+    
+    def __repr__(self):
+        return f"SnapToRoadTrackPoint<{self.absolute_idx},X={self.geodetic_point.x},Y={self.geodetic_point.y}>"
+
+    def set_absolute_idx(self, absolute_idx):
+        """Set this point's absolute index."""
+        self.absolute_idx = absolute_idx
+
+
+class SnapToRoadTrack(db.Model, EPSGWrapperMixin):
+    """A model for containing a list of snap to road track points."""
+    __tablename__ = "snap_to_road_track"
+
+    id: Mapped[int] = mapped_column(primary_key = True)
+
+    # A list of all points attached to this track. Eagerly loaded, ordered by absolute point index in ascending order.
+    track_points: Mapped[List[SnapToRoadTrackPoint]] = relationship(
+        back_populates = "snap_to_road_track",
+        uselist = True,
+        order_by = "asc(SnapToRoadTrackPoint.absolute_idx)",
+        cascade = "all, delete")
+
+    def __repr__(self):
+        return f"SnapToRoadTrack<npts={self.num_points}>"
+    
+    @property
+    def num_points(self):
+        """Return the number of points in this track."""
+        return len(self.track_points)
+    
+    def add_point(self, track_point):
+        """Add the given SnapToRoadTrackPoint to this track. This function will raise ValueError if CRS does not match this track's CRS."""
+        if track_point.crs != self.crs:
+            raise ValueError(f"Failed to add pt {track_point} to a track. CRS mismatch!")
+        self.track_points.append(track_point)
+
+    def remove_point(self, track_point):
+        """Remove the given SnapToRoadTrackPoint from this track."""
+        self.track_points.remove(track_point)
+    
+
+class SnapToRoadOrder(db.Model):
+    """A model for containing a snap to road order, as part of the verification process for a new track. It will hold two separate references to the SnapToRoadTrack table,
+    one for containing the track as yet to be snapped to road, and the other having been snapped to road. The process of snapping should therefore remove points that have
+    been snapped from the unsnapped geometry, and place them within the snapped geometry."""
+    __tablename__ = "snap_to_road_order"
+
+    id: Mapped[int] = mapped_column(primary_key = True)
+    # A foreign key to the snap to track model, for the unsnapped track points. Can't be None.
+    unsnapped_track_id: Mapped[int] = mapped_column(ForeignKey("snap_to_road_track.id"), nullable = False)
+    # A foreign key to the snap to track model, for the snapped track points. Can't be None.
+    snapped_track_id: Mapped[int] = mapped_column(ForeignKey("snap_to_road_track.id"), nullable = False)
+    # A foreign key to the track. Can't be None.
+    track_id: Mapped[int] = mapped_column(ForeignKey("track.id"), nullable = False)
+
+    # The number of points in total to expect, set during creation phase.
+    static_num_points: Mapped[int] = mapped_column(nullable = False)
+    # The track. Can't be None.
+    track: Mapped["Track"] = relationship(
+        uselist = False)
+    # The unsnapped snap to track instance. Can't be None.
+    unsnapped_track: Mapped[SnapToRoadTrack] = relationship(
+        uselist = False,
+        foreign_keys = [unsnapped_track_id])
+    # The snapped snap to track instance. Can't be None.
+    snapped_track: Mapped[SnapToRoadTrack] = relationship(
+        uselist = False,
+        foreign_keys = [snapped_track_id])
+    
+    def __repr__(self):
+        return f"SnapToRoadOrder<{self.track},% snapped={self.percent_snapped}>"
+    
+    @property
+    def is_complete(self):
+        """Returns True if this entire order is complete."""
+        return self.percent_snapped == 100
+    
+    @property
+    def num_unsnapped_batches(self):
+        """Return the number of batches required to snap the remaining points."""
+        return math.ceil(self.unsnapped_track.num_points / config.NUM_POINTS_PER_SNAP_BATCH)
+    
+    @property
+    def percent_snapped(self):
+        """Returns the total percent snapped."""
+        if self.snapped_track.num_points == 0:
+            return 0
+        return int((self.snapped_track.num_points / (self.unsnapped_track.num_points + self.snapped_track.num_points)) * 100)
+    
+    def set_static_num_points(self, static_num_points):
+        """Set the static number of points."""
+        self.static_num_points = static_num_points
+
+    def set_track(self, track):
+        """Set the subject track instance."""
+        self.track = track
+    
+    def set_unsnapped_track(self, unsnapped):
+        """Set the unsnapped track in question."""
+        self.unsnapped_track = unsnapped
+    
+    def set_snapped_track(self, snapped):
+        """Set the snapped track in question."""
+        self.snapped_track = snapped
 
 
 class TrackUserRace(db.Model, LineStringGeometryMixin):
@@ -308,8 +437,16 @@ class TrackUserRace(db.Model, LineStringGeometryMixin):
     dq_extra_info_: Mapped[str] = mapped_column(Text(), nullable = True, default = None)
     # If this race has been cancelled. Can't be None.
     cancelled: Mapped[bool] = mapped_column(nullable = False, default = False)
+    # If this race attempt should not be included in actual results when in Production/LiveDevelopment mode; specifically, use this for showcasing. Can't be None, default is False.
+    fake: Mapped[bool] = mapped_column(nullable = False, default = False)
+
+    ### Some race values, these are updated while the race is ongoing. ###
     # Average speed, in meters per hour. Can be None.
     average_speed: Mapped[int] = mapped_column(nullable = True, default = None)
+    # Percent of the track complete, only applies to Sprint type tracks. Can be None.
+    percent_complete: Mapped[int] = mapped_column(nullable = True, default = None)
+    # Number of laps complete, only applies to Circuit type tracks. Can be None.
+    num_laps_complete: Mapped[int] = mapped_column(nullable = True, default = None)
  
     # An association proxy for the Track's UID, which is actually the track's hash.
     track_uid: AssociationProxy["Track"] = association_proxy("track", "uid")
@@ -440,12 +577,24 @@ class TrackUserRace(db.Model, LineStringGeometryMixin):
         """Set this race's average speed."""
         self.average_speed = average_speed
 
+    def set_num_laps_complete(self, num_laps_complete):
+        """Set the number of laps this track is verified to have completed."""
+        self.num_laps_complete = num_laps_complete
+    
+    def set_percent_complete(self, percent_complete):
+        """Set the percent of the track complete."""
+        self.percent_complete = percent_complete
+
     def add_location(self, location):
         """Add the location as progress."""
         # Add the new location.
         self.progress.append(location)
         # Each time we add a new location, we must re-comprehend the progress geometry.
         self._refresh_progress_geometry()
+    
+    def set_fake(self, fake):
+        """Set whether this attempt is fake or not."""
+        self.fake = fake
 
     def _refresh_progress_geometry(self):
         """Get all geometries from the list of progress locations, and set the race's progress geometry to the result."""
@@ -573,8 +722,12 @@ class Track(db.Model, PointGeometryMixin):
     description: Mapped[str] = mapped_column(String(256), nullable = False)
     # The track's type. Can't be None.
     track_type: Mapped[int] = mapped_column(nullable = False)
-    # Whether this track has been verified. Default is False, can't be None.
+    # Whether this track's path has been processed and snap-to-roads has been executed on it (or if this process was skipped.) Default is not REQUIRE_SNAP_TO_ROADS. Can't be None.
+    snapped_to_roads: Mapped[bool] = mapped_column(nullable = False, default = not config.REQUIRE_SNAP_TO_ROADS)
+    # Whether this track has been verified; meaning administrators have approved it. Default is False, can't be None.
     verified: Mapped[bool] = mapped_column(nullable = False, default = False)
+    # The number of laps required by this track. This only applies when this track is a circuit. Can be None.
+    num_laps_required: Mapped[int] = mapped_column(nullable = True, default = None)
 
     # The ratings given by Users to this track, as a dynamic relationship. Unordered.
     ratings_: Mapped[List[TrackRating]] = relationship(
@@ -614,14 +767,18 @@ class Track(db.Model, PointGeometryMixin):
     
     @hybrid_property
     def can_be_raced(self):
-        """Returns True if this track can be raced; that is, it is verified and has an owner. This boolean should be used to determine whether
-        this track appears on the world map."""
-        return self.is_verified and self.has_owner
+        """Returns True if this track can be raced; that is, it is verified, snapped to roads and has an owner. This boolean should be used
+        to determine whether this track appears on the world map."""
+        return self.is_verified and self.is_snapped_to_roads and self.has_owner
     
     @can_be_raced.expression
     def can_be_raced(cls):
         """Expression level equivalent of can be raced."""
-        return and_(cls.is_verified, cls.has_owner)
+        return and_(cls.is_verified, and_(cls.is_snapped_to_roads, cls.has_owner))
+    
+    @hybrid_property
+    def is_snapped_to_roads(self):
+        return self.snapped_to_roads
     
     @hybrid_property
     def is_verified(self):
@@ -632,6 +789,16 @@ class Track(db.Model, PointGeometryMixin):
         """Returns True if this Track has an owner."""
         return self.user != None
     
+    @property
+    def is_sprint(self):
+        """Returns True if this Track is a Sprint type race."""
+        return self.track_type == self.TYPE_SPRINT
+    
+    @property
+    def is_circuit(self):
+        """Returns True if this Track is a Circuit type race."""
+        return self.track_type == self.TYPE_CIRCUIT
+
     @property
     def num_comments(self):
         """Returns the total count of the comments relationship."""
@@ -659,6 +826,10 @@ class Track(db.Model, PointGeometryMixin):
         """Set this track's type."""
         self.track_type = track_type
 
+    def set_num_laps_required(self, num_laps_required):
+        """Set the number of laps required for this Track."""
+        self.num_laps_required = num_laps_required
+
     def set_verified(self, verified):
         """Set whether this track is verified."""
         self.verified = verified
@@ -671,20 +842,20 @@ class Track(db.Model, PointGeometryMixin):
         """Set the owner of this track to the given User."""
         self.user = user
 
-    '''@classmethod
-    def find(cls, **kwargs):
-        """Find a track matching the given criteria. Only the first result of whatever criteria given will be returned."""
-        track_hash = kwargs.get("track_hash", None)
-        track_uid = kwargs.get("track_uid", None)
-        track_q = db.session.query(Track)
-        if track_hash:
-            track_q = track_q\
-                .filter(Track.track_hash == track_hash)
-        if track_uid:
-            track_q = track_q\
-                .filter(Track.uid == track_uid)
-        return track_q.first()'''
+    def set_snapped_to_roads(self, snapped):
+        """Sets whether this track's path has been snapped to roads."""
+        self.snapped_to_roads = snapped
 
+    def set_circuit(self, num_laps_required):
+        """Set this track as a circuit."""
+        self.set_num_laps_required(num_laps_required)
+        self.set_track_type(self.TYPE_CIRCUIT)
+    
+    def set_sprint(self):
+        """Set this track as a sprint."""
+        self.set_num_laps_required(None)
+        self.set_track_type(self.TYPE_SPRINT)
+        
 
 class UserVerify(db.Model):
     """A model that will contain verification requests posted toward specific users."""

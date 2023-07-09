@@ -30,6 +30,7 @@ gpxpy = "*"
 emoji = "*"
 pyproj = "*"
 gunicorn = "==20.1.0"
+requests = "*"
 
 [dev-packages]
 

@@ -210,7 +210,10 @@ def get_track_with_path(track, **kwargs):
 @decorators.account_setup_required()
 def new_track(**kwargs):
     """Perform a PUT request alongside the requirements for a brand new Track to create one here. The body should be a JSON object, containing the values found
-    in the LoadTrackSchema. This route will first ensure the User is allowed to create tracks. The Track will be created and then serialised and returned."""
+    in the LoadTrackSchema. This route will first ensure the User is allowed to create tracks. The Track will be created and then serialised and returned; if the
+    path did not require any verification or approval (in other words, it already exists and the track is verified) we will deliver both the track and the path.
+    
+    Either way, receiving code should be prepared for both a Track and its path, if the Track's verified."""
     try:
         # Get the new track JSON from the request.
         new_track_json = request.json
@@ -223,8 +226,15 @@ def new_track(**kwargs):
         track_view_model = account_view_model.create_track(new_track_json)
         # Commit to the database.
         db.session.commit()
-        # Reply with the serialised track.
-        return track_view_model.serialise(), 200
+        # Now, if the track can be raced, return the path as well.
+        if track_view_model.can_be_raced:
+            track_path_d = track_view_model.path.serialise()
+        else:
+            track_path_d = None
+        # Reply with the serialised track and path.
+        return dict(
+            track = track_view_model.serialise(),
+            track_path = track_path_d), 200
     except Exception as e:
         raise e
 
@@ -335,13 +345,18 @@ def manage_track_comment(track, comment_uid, **kwargs):
 @decorators.get_track(should_belong_to_user = False)
 def page_track_leaderboard(track, **kwargs):
     """Perform a GET request to page the leaderboard for the given track. Supply a query argument 'p' to identify the page we have requested. On success, the route will
-    return a page object containing the Track, ordered finished race outcomes, the current page number and the next page number (or None if there are no more.)"""
+    return a page object containing the Track, ordered finished race outcomes, the current page number and the next page number (or None if there are no more.) A filter
+    can be provided with the name 'f'. Filter will be None by default, meaning no filter. A filter with value 'my' will return only leaderboard items belonging to the 
+    current User."""
     try:
         # Get the page argument. By default, page one.
         page = int(request.args.get("p", 1))
+        # Get the filter argument. By default, None.
+        filter_ = request.args.get("f", None)
         # With the track and the requested page, create a new track view model and get back a SerialisablePagination object from the view model.
         track_view_model = viewmodel.TrackViewModel(current_user, track)
-        leaderboard_sp = track_view_model.page_leaderboard(page)
+        leaderboard_sp = track_view_model.page_leaderboard(page,
+            filter_ = filter_)
         # Now, return this as a paged response, providing a base dict containing the serialised track view model, too.
         return leaderboard_sp.as_paged_response(base_dict = dict(
             track = track_view_model.serialise())), 200
@@ -358,9 +373,12 @@ def page_track_comments(track, **kwargs):
     try:
         # Get the page argument. By default, page one.
         page = int(request.args.get("p", 1))
+        # Get the filter argument. By default, None.
+        filter_ = request.args.get("f", None)
         # With the track and the requested page, create a new track view model and get back a SerialisablePagination object from the view model.
         track_view_model = viewmodel.TrackViewModel(current_user, track)
-        comments_sp = track_view_model.page_comments(page)
+        comments_sp = track_view_model.page_comments(page,
+            filter_ = filter_)
         # Now, return this as a paged response, providing a base dict containing the serialised track view model, too.
         return comments_sp.as_paged_response(base_dict = dict(
             track = track_view_model.serialise())), 200

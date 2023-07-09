@@ -12,6 +12,9 @@ class PrivateBaseConfig():
     # Configurations for Flask.
     """TODO"""
     SECRET_KEY = ""
+    # Configurations for Google Maps API. Set this to None to disable using Google Maps API.
+    """TODO"""
+    GOOGLE_MAPS_API_KEY = None
 
 
 class PrivateTestConfig():

@@ -130,6 +130,20 @@ class BaseCase(TestCase):
         db.session.flush()
         return created_track.track
 
+    def make_track_user_race(self, track, user, started, **kwargs):
+        """"""
+        # Create the new instance with started set.
+        track_user_race = models.TrackUserRace(
+            started = started)
+        # Set vehicle.
+        track_user_race.set_vehicle(user.vehicles.first())
+        # Set track and User.
+        track_user_race.set_track_and_user(track, user)
+        # Add to session and flush to get a new UID.
+        db.session.add(track_user_race)
+        db.session.flush()
+        return track_user_race
+    
     def make_finished_track_user_race(self, track, user, started, finished, **kwargs):
         """"""
         # Create the new instance with started set.

@@ -39,8 +39,9 @@ from . import handler
 
 
 def create_app():
-    logging.info(f"Creating Flask instance in the '{config.APP_ENV}' environment")
-    app = Flask(__name__, instance_path = os.path.join(os.getcwd(), config.INSTANCE_PATH))
+    logging.info(f"Creating Flask instance in the '{config.APP_ENV}' environment (for web)")
+    app = Flask(__name__, 
+        instance_path = os.path.join(os.getcwd(), config.INSTANCE_PATH))
     app.wsgi_app = ProxyFix(
         app.wsgi_app,
         x_for = config.FORWARDED_FOR,
@@ -65,4 +66,12 @@ def create_app():
         handler.configure_login_manager(app)
         if config.APP_ENV != "Test":
             pass
+    return app
+
+
+def create_worker_app():
+    logging.info(f"Creating Flask instance in the '{config.APP_ENV}' environment (for Celery worker)")
+    app = Flask(__name__, 
+        instance_path = os.path.join(os.getcwd(), config.INSTANCE_PATH))
+    app.config.from_object(config)
     return app
