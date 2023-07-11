@@ -342,8 +342,8 @@ class VehicleViewModel(BaseViewModel):
 
 
 class LeaderboardEntryViewModel(BaseViewModel):
-    """A view model for representing a specific user's race outcome as a leaderboard entry. We'll use a view model for this to allow users to like and
-    comment on entries."""
+    """A view model for representing a specific user's race outcome as a leaderboard entry. This view model can only be built if the given object is a TrackUserRace that is
+    no longer ongoing, and is successfully complete; otherwise an error will be raised. We'll use a view model for this to allow users to like and comment on entries."""
     class LeaderboardEntryViewSchema(Schema):
         """A schema representing a single TrackUserRace outcome for this track."""
         class Meta:
@@ -387,9 +387,11 @@ class LeaderboardEntryViewModel(BaseViewModel):
 
     @property
     def stopwatch(self):
-        """The duration of this race, in milliseconds."""
-        # If race is not ongoing and not finished, return -1 from this function.
+        """The duration of this race, in milliseconds. Races that are ongoing will cause failures while trying to instantiate the view model, but
+        we will leave this protective code below."""
         if not self.patient.is_ongoing and not self.patient.is_finished:
+            # If race is not ongoing and not finished, return -1 from this function; since executing this on a race attempt that ended in any way other than
+            # success will be unbounded.
             return -1
         return self.patient.stopwatch
 
@@ -407,6 +409,25 @@ class LeaderboardEntryViewModel(BaseViewModel):
     def track_uid(self):
         """The track's UID."""
         return self.patient.track_uid
+
+    def __init__(self, _actor, _track_user_race, **kwargs):
+        """A normal view model constructor with an actor and a patient, but the patient must be a TrackUserRace, or another view model that also utilises a TrackUserRace
+        as the patient entity. That race outcome must not be ongoing, and also must be successfully completed. If these requirements are not qualified, the following errors
+        will be raised;
+        
+        TypeError
+        ---------
+        The patient must be (but is not) of type TrackUserRace, or be a view model that utilises TrackUserRace as patient.
+
+        AttributeError
+        --------------
+        The given race outcome is either still ongoing, or is not a successful attempt. Either way, it can't be used."""
+        if not isinstance(_track_user_race, models.TrackUserRace):
+            raise TypeError
+        elif _track_user_race.is_ongoing or not _track_user_race.is_finished:
+            raise AttributeError
+        # Otherwise, finalise construction.
+        super().__init__(_actor, _track_user_race, **kwargs)
 
     def serialise(self, **kwargs):
         """Serialise and return a LeaderboardEntryViewSchema representing the view relationship between the actor entity and the patient TrackUserRace.

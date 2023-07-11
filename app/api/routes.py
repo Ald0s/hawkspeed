@@ -172,6 +172,38 @@ def get_our_vehicles(**kwargs):
         raise e
     
 
+@api.route("/api/v1/races/<race_uid>", methods = [ "GET" ])
+@decorators.account_setup_required()
+@decorators.get_race()
+def get_race(race, **kwargs):
+    """Perform a GET request with a race's UID to get its current state."""
+    try:
+        raise NotImplementedError()
+    except Exception as e:
+        raise e
+    
+
+@api.route("/api/v1/races/<race_uid>/leaderboard", methods = [ "GET" ])
+@decorators.account_setup_required()
+@decorators.get_race()
+def get_race_leaderboard(race, **kwargs):
+    """Perform a GET request with a race's UID to get its detail here. The User must be authenticated and their profile must be set up for them to have access to this.
+    This route will return a serialised leaderboard entry view model for the requested race attempt. Note: naming may be confusing but since HawkSpeed races are solo,
+    when we refer to 'leaderboard' for a specific RACE instance, there's actually a 1:1 relationship between a User and the Race - so a RACE'S leaderboard refers to a
+    specific outcome for a specific User on a track."""
+    try:
+        # With the received track user race instance, create a leaderboard entry view model.
+        try:
+            leaderboard_entry_view_model = viewmodel.LeaderboardEntryViewModel(current_user, race)
+        except (TypeError, AttributeError) as e:
+            """TODO: handle this error. the user has attempted to request a specific race instance as a leaderboard entry, but this race is not successful."""
+            raise NotImplementedError(f"get_race_leaderboard failed, race with UID {race.uid} is not in a finished state.")
+        # Serialise and return this view model.
+        return leaderboard_entry_view_model.serialise(), 200
+    except Exception as e:
+        raise e
+    
+
 @api.route("/api/v1/track/<track_uid>", methods = [ "GET" ])
 @decorators.account_setup_required()
 @decorators.get_track(should_belong_to_user = False)

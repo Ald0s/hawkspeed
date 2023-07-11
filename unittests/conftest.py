@@ -116,7 +116,7 @@ class BaseCase(TestCase):
         socket_id = kwargs.get("socket_id", uuid.uuid4().hex.lower())
         if not request_connect_authentication:
             request_connect_authentication = world.RequestConnectAuthentication(
-                device_fid = uuid.uuid4().hex.lower(), latitude = 0.0, longitude = 0.0, rotation = 0.0, speed = 0.0, logged_at = time.time() * 1000)
+                device_fid = uuid.uuid4().hex.lower(), latitude = 0.0, longitude = 0.0, bearing = 0.0, speed = 0.0, logged_at = time.time() * 1000)
         new_player = world.create_player_session(user, socket_id, request_connect_authentication)
         user.set_player(new_player)
         db.session.flush()
@@ -386,5 +386,5 @@ class PlayerRaceGPXSimulator():
                     longitude = point.longitude,
                     logged_at = (point.time.timestamp() * 1000) + ms_adjustment,
                     speed = 40,
-                    rotation = 180.0
+                    bearing = 180.0
                 )

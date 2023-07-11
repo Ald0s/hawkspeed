@@ -143,6 +143,26 @@ def get_ongoing_race(user, **kwargs) -> models.TrackUserRace:
         raise e
     
 
+def get_race(**kwargs) -> models.TrackUserRace:
+    """Attempt to locate a race identified by arguments passed in keyword arguments.
+    
+    Keyword arguments
+    -----------------
+    :race_uid: The Race's UID.
+    
+    Returns
+    -------
+    An instance of TrackUserRace."""
+    try:
+        race_uid = kwargs.get("race_uid", None)
+        if race_uid == None:
+            return None
+        
+
+    except Exception as e:
+        raise e
+    
+
 class StartRaceResult():
     """A container for storing the result of starting a new race."""
     class StartRaceResponseSchema(Schema):

@@ -33,16 +33,16 @@ class TestWorld(BaseCase):
         db.session.flush()
         # Create 10 locations, 2 will be connected to the track, 8 will not.
         user_locations = [
-            world.prepare_user_location(dict(latitude = -37.843652, longitude = 145.03001, logged_at = 1678508081000, speed = 70.0, rotation = 180.0)),
-            world.prepare_user_location(dict(latitude = -37.84354, longitude = 145.029053, logged_at = 1678508082000, speed = 70.0, rotation = 180.0)),
-            world.prepare_user_location(dict(latitude = -37.84355, longitude = 145.029053, logged_at = 1678508083000, speed = 70.0, rotation = 180.0)),
-            world.prepare_user_location(dict(latitude = -37.84356, longitude = 145.029053, logged_at = 1678508084000, speed = 70.0, rotation = 180.0)),
-            world.prepare_user_location(dict(latitude = -37.84357, longitude = 145.029053, logged_at = 1678508085000, speed = 70.0, rotation = 180.0)),
-            world.prepare_user_location(dict(latitude = -37.84358, longitude = 145.029053, logged_at = 1678508086000, speed = 70.0, rotation = 180.0)),
-            world.prepare_user_location(dict(latitude = -37.84359, longitude = 145.029053, logged_at = 1678508087000, speed = 70.0, rotation = 180.0)),
-            world.prepare_user_location(dict(latitude = -37.84360, longitude = 145.029053, logged_at = 1678508088000, speed = 70.0, rotation = 180.0)),
-            world.prepare_user_location(dict(latitude = -37.84361, longitude = 145.029053, logged_at = 1678508089000, speed = 70.0, rotation = 180.0)),
-            world.prepare_user_location(dict(latitude = -37.84362, longitude = 145.029053, logged_at = 1678508090000, speed = 70.0, rotation = 180.0))
+            world.prepare_user_location(dict(latitude = -37.843652, longitude = 145.03001, logged_at = 1678508081000, speed = 70.0, bearing = 180.0)),
+            world.prepare_user_location(dict(latitude = -37.84354, longitude = 145.029053, logged_at = 1678508082000, speed = 70.0, bearing = 180.0)),
+            world.prepare_user_location(dict(latitude = -37.84355, longitude = 145.029053, logged_at = 1678508083000, speed = 70.0, bearing = 180.0)),
+            world.prepare_user_location(dict(latitude = -37.84356, longitude = 145.029053, logged_at = 1678508084000, speed = 70.0, bearing = 180.0)),
+            world.prepare_user_location(dict(latitude = -37.84357, longitude = 145.029053, logged_at = 1678508085000, speed = 70.0, bearing = 180.0)),
+            world.prepare_user_location(dict(latitude = -37.84358, longitude = 145.029053, logged_at = 1678508086000, speed = 70.0, bearing = 180.0)),
+            world.prepare_user_location(dict(latitude = -37.84359, longitude = 145.029053, logged_at = 1678508087000, speed = 70.0, bearing = 180.0)),
+            world.prepare_user_location(dict(latitude = -37.84360, longitude = 145.029053, logged_at = 1678508088000, speed = 70.0, bearing = 180.0)),
+            world.prepare_user_location(dict(latitude = -37.84361, longitude = 145.029053, logged_at = 1678508089000, speed = 70.0, bearing = 180.0)),
+            world.prepare_user_location(dict(latitude = -37.84362, longitude = 145.029053, logged_at = 1678508090000, speed = 70.0, bearing = 180.0))
         ]
         # Associate all with the User, so they are all granted a User ID.
         for x in user_locations:
@@ -72,7 +72,7 @@ class TestWorld(BaseCase):
         def add_user_locations():
             # Add 6 user locations to the User's history.
             for x in range(6):
-                location = world.prepare_user_location(dict(latitude = -37.8490495286849, longitude = 145.00537088213827, logged_at = 1678508080000+x, speed = 70.0, rotation = 180.0))
+                location = world.prepare_user_location(dict(latitude = -37.8490495286849, longitude = 145.00537088213827, logged_at = 1678508080000+x, speed = 70.0, bearing = 180.0))
                 # Add it.
                 aldos.add_location(location)
             db.session.flush()
@@ -134,8 +134,8 @@ class TestWorld(BaseCase):
         db.session.flush()
         # Prepare two locations; one in which the example track is within proximity, and the other where it is not.
         prepared_user_locations = [
-            world.prepare_user_location(dict(latitude = -37.843746, longitude = 145.030509, logged_at = 1678508080000, speed = 70.0, rotation = 180.0)),
-            world.prepare_user_location(dict(latitude = -37.843928, longitude = 145.032065, logged_at = 1678508080000+1000, speed = 70.0, rotation = 180.0))
+            world.prepare_user_location(dict(latitude = -37.843746, longitude = 145.030509, logged_at = 1678508080000, speed = 70.0, bearing = 180.0)),
+            world.prepare_user_location(dict(latitude = -37.843928, longitude = 145.032065, logged_at = 1678508080000+1000, speed = 70.0, bearing = 180.0))
         ]
         # Now, collect nearby world objects for the first User location.
         nearby_world_objects = world.collect_nearby_objects(aldos, prepared_user_locations[0])

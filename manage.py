@@ -135,7 +135,7 @@ def create_user(email_address, password, username, drive, privilege, enabled, ve
 @click.argument("username")
 @click.argument("started")
 @click.argument("finished")
-def create_user(track_uid, username, started, finished):
+def add_fake_race_attempt(track_uid, username, started, finished):
     # Find User.
     user = models.User.search(username = username)
     if not user:

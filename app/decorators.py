@@ -9,7 +9,7 @@ from flask import request, g, redirect, url_for, render_template
 from flask_login import current_user, login_required as flask_login_required
 from werkzeug.exceptions import Unauthorized
 
-from . import db, config, models, error, tracks, users
+from . import db, config, models, error, races, tracks, users
 
 LOG = logging.getLogger("hawkspeed.decorators")
 LOG.setLevel( logging.DEBUG )
@@ -157,6 +157,39 @@ def get_track(**kwargs):
                 raise NotImplementedError("Track is not owned by the User requesting it, but this is required. This is not handled either.")
             # Finally, pass the track back via output key.
             kwargs[track_output_key] = track
+            # And call original function.
+            return f(*args, **kwargs)
+        return decorated_view
+    return decorator
+
+
+def get_race(**kwargs):
+    """Locate a Race with the given Race UID passed in keyword arguments.
+
+    Keyword arguments
+    -----------------
+    :race_uid_key: The key under which the UID for the Race to be grabbed. Default is 'race_uid'.
+    :race_output_key: The key under which the located Race should be passed. Default is 'race'.
+    :required: A boolean; True if the route should fail if the Race not found. Default is True."""
+    race_uid_key = kwargs.get("race_uid_key", "race_uid")
+    race_output_key = kwargs.get("race_output_key", "race")
+    required = kwargs.get("required", True)
+
+    def decorator(f):
+        @account_setup_required()
+        @wraps(f)
+        def decorated_view(*args, **kwargs):
+            # Get the incoming Race UID.
+            race_uid = kwargs.get(race_uid_key, None)
+            # Attempt to find the Race.
+            race = races.find_existing_user(
+                race_uid = race_uid)
+            # If no Race found, raise an error.
+            if not race:
+                """TODO: handle this properly."""
+                raise NotImplementedError("Could not find race by UID in decorator. This is not handled either.")
+            # Finally, pass the Race back via output key.
+            kwargs[race_output_key] = race
             # And call original function.
             return f(*args, **kwargs)
         return decorated_view

@@ -129,8 +129,8 @@ class TestRaces(BaseCase):
         self.assertIsNone(race.linestring)
         # Now, create two UserLocations, which represent the first two points in the track. We'll use the first two locations in example1 exactly.
         user_locations = [
-            world.prepare_user_location(dict(latitude = -37.843652, longitude = 145.03001, logged_at = 1678508081000, speed = 70.0, rotation = 180.0)),
-            world.prepare_user_location(dict(latitude = -37.84354, longitude = 145.029053, logged_at = 1678508082000, speed = 70.0, rotation = 180.0))
+            world.prepare_user_location(dict(latitude = -37.843652, longitude = 145.03001, logged_at = 1678508081000, speed = 70.0, bearing = 180.0)),
+            world.prepare_user_location(dict(latitude = -37.84354, longitude = 145.029053, logged_at = 1678508082000, speed = 70.0, bearing = 180.0))
         ]
         # Associate all with the User, so they are all granted a User ID.
         for x in user_locations:

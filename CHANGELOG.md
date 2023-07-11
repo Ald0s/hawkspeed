@@ -62,3 +62,9 @@
 * Creating new track now immediately returns its full path, if the track is verified straight away, otherwise null is returned in place of the path,
 * Added fake attribute to user race attempts for allowing unproven leaderboard entries - strictly only in dev environments,
 * Split track verififcation into; verification (for admin approvals) and snapped_to_road (for ensuring tracks are snapped if required).
+
+## Version 0.01.01
+* Changed attribute name 'rotation' to 'bearing' since I have decided to, on clientside anyway, make these two distinct,
+* Added API route for querying a race leaderboard entry,
+* Added not-None checks to all functions responsible for finding artefacts, to avoid first() returning the first artefact in db without arguments,
+* Changed LeaderboardEntryViewModel to enforce type strictness on patient, also enforce patients to be successfully completed race instances.

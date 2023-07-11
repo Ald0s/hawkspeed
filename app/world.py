@@ -110,7 +110,7 @@ class RequestPlayerUpdate():
         """Call constructor with all arguments passed to keyword arguments."""
         self.latitude = kwargs.get("latitude")
         self.longitude = kwargs.get("longitude")
-        self.rotation = kwargs.get("rotation")
+        self.bearing = kwargs.get("bearing")
         self.speed = kwargs.get("speed")
         self.logged_at = kwargs.get("logged_at")
 
@@ -123,7 +123,7 @@ class RequestPlayerUpdateSchema(Schema):
     # About the Player's position.
     latitude                = fields.Decimal(as_string = True, required = True, allow_none = False)
     longitude               = fields.Decimal(as_string = True, required = True, allow_none = False)
-    rotation                = fields.Decimal(as_string = True, required = True, allow_none = False)
+    bearing                 = fields.Decimal(as_string = True, required = True, allow_none = False)
     speed                   = fields.Decimal(as_string = True, required = True, allow_none = False)
     # Timestamp, in milliseconds.
     logged_at               = fields.Int(required = True, allow_none = False)
@@ -158,7 +158,7 @@ class RequestConnectAuthentication():
         self.device_fid = kwargs.get("device_fid")
         self.latitude = kwargs.get("latitude")
         self.longitude = kwargs.get("longitude")
-        self.rotation = kwargs.get("rotation")
+        self.bearing = kwargs.get("bearing")
         self.speed = kwargs.get("speed")
         self.logged_at = kwargs.get("logged_at")
 
@@ -172,7 +172,7 @@ class RequestConnectAuthenticationSchema(Schema):
     # About the Player's initial position when joining.
     latitude                = fields.Decimal(as_string = True, required = True, allow_none = False)
     longitude               = fields.Decimal(as_string = True, required = True, allow_none = False)
-    rotation                = fields.Decimal(as_string = True, required = True, allow_none = False)
+    bearing                 = fields.Decimal(as_string = True, required = True, allow_none = False)
     speed                   = fields.Decimal(as_string = True, required = True, allow_none = False)
     # Timestamp, in seconds.
     logged_at               = fields.Int(required = True, allow_none = False)
@@ -325,8 +325,8 @@ class PlayerJoinResult():
         return self._user_location.longitude
 
     @property
-    def rotation(self):
-        return self._user_location.rotation
+    def bearing(self):
+        return self._user_location.bearing
     
     @property
     def crs(self):
@@ -401,8 +401,8 @@ class PlayerUpdateResult():
         return self._user_location.longitude
 
     @property
-    def rotation(self):
-        return self._user_location.rotation
+    def bearing(self):
+        return self._user_location.bearing
     
     @property
     def crs(self):
@@ -491,7 +491,7 @@ def _prepare_user_location(request_player_update, **kwargs) -> models.UserLocati
         location_pt = shapely.ops.transform(transformer.transform, location_pt)
         # With that done, instantiate a new user location and set basic information.
         user_location = models.UserLocation(
-            longitude = request_player_update.longitude, latitude = request_player_update.latitude, logged_at = request_player_update.logged_at, rotation = request_player_update.rotation, speed = request_player_update.speed)
+            longitude = request_player_update.longitude, latitude = request_player_update.latitude, logged_at = request_player_update.logged_at, bearing = request_player_update.bearing, speed = request_player_update.speed)
         # Set the location's CRS and position.
         user_location.set_crs(config.WORLD_CONFIGURATION_CRS)
         user_location.set_position(location_pt)

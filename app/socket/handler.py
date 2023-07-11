@@ -69,7 +69,7 @@ class PlayerJoinResponseSchema(Schema):
     uid                     = fields.Str(data_key = "player_uid")
     latitude                = fields.Decimal(as_string = True, required = True)
     longitude               = fields.Decimal(as_string = True, required = True)
-    rotation                = fields.Decimal(as_string = True, required = True)
+    bearing                 = fields.Decimal(as_string = True, required = True)
     # Now, also the nearby object update associated with this player join response, this can be None.
     world_object_update     = fields.Nested(WorldObjectUpdateResponseSchema, many = False, allow_none = True)
 
@@ -79,7 +79,7 @@ class PlayerUpdateResponseSchema(Schema):
     uid                     = fields.Str(data_key = "player_uid")
     latitude                = fields.Decimal(as_string = True, required = True)
     longitude               = fields.Decimal(as_string = True, required = True)
-    rotation                = fields.Decimal(as_string = True, required = True)
+    bearing                 = fields.Decimal(as_string = True, required = True)
     # Now, also the nearby object update associated with this player update response, this can be None.
     world_object_update     = fields.Nested(WorldObjectUpdateResponseSchema, many = False, allow_none = True)
 

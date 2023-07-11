@@ -286,6 +286,8 @@ def find_existing_track(**kwargs) -> models.Track:
         track_hash = kwargs.get("track_hash", None)
         track_uid = kwargs.get("track_uid", None)
         validate_can_race = kwargs.get("validate_can_race", False)
+        if track_hash == None and track_uid == None:
+            return None
 
         existing_track_q = db.session.query(models.Track)
         # Attach track hash.
@@ -325,14 +327,14 @@ class LoadedPoint():
     @property
     def is_user_made(self):
         # Returns True if this point has User data.
-        return self.logged_at != None and self.speed != None and self.rotation != None
+        return self.logged_at != None and self.speed != None and self.bearing != None
     
     def __init__(self, **kwargs):
         self.latitude = kwargs.get("latitude")
         self.longitude = kwargs.get("longitude")
         self.logged_at = kwargs.get("logged_at", None)
         self.speed = kwargs.get("speed", None)
-        self.rotation = kwargs.get("rotation", None)
+        self.bearing = kwargs.get("bearing", None)
 
 
 class LoadPointSchema(Schema):
@@ -355,7 +357,7 @@ class LoadUserPointSchema(Schema):
     longitude               = fields.Decimal(as_string = True)
     logged_at               = fields.Int(required = True, allow_none = False)
     speed                   = fields.Decimal(as_string = True, required = True, allow_none = False)
-    rotation                = fields.Decimal(as_string = True, required = True, allow_none = False)
+    bearing                 = fields.Decimal(as_string = True, required = True, allow_none = False)
 
     @post_load
     def make_loaded_user_point(self, data, **kwargs) -> LoadedPoint:
@@ -700,7 +702,7 @@ def create_track(loaded_track, **kwargs) -> CreatedTrack:
 
 
 def _validate_loaded_user_track(loaded_user_track, **kwargs):
-    """Validate the given loaded track; that is, one that was created by a User and therefore all recording data (speed, rotation, times) were given. This function will
+    """Validate the given loaded track; that is, one that was created by a User and therefore all recording data (speed, bearing, times) were given. This function will
     succeed silently, or it will fail with an exception. Validating the track involves ensuring the data given by the User is properly structured as a track, this does
     not have anything to do with verify the track with Google API to snap to roads or whatever, this will be done programmatically, as long as track is created with
     verified set to False.

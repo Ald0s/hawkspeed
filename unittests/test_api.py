@@ -436,3 +436,11 @@ class TestTrackAPI(BaseAPICase):
     def test_track_comments(self):
         """"""
         self.assertEqual(True, False)
+
+    def test_get_race(self):
+        """"""
+        self.assertEqual(True, False)
+
+    def test_get_race_leaderboard(self):
+        """"""
+        self.assertEqual(True, False)

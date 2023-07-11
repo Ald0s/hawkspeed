@@ -972,8 +972,8 @@ class UserLocation(db.Model, PointGeometryMixin):
     latitude: Mapped[float] = mapped_column(Numeric(13, 11), nullable = False)
     # The time (in milliseconds) at which this location snapshot was taken. Can't be None.
     logged_at: Mapped[int] = mapped_column(BigInteger, nullable = False)
-    # The User's rotation at this time. Can't be None.
-    rotation: Mapped[float] = mapped_column(Numeric(8,5), nullable = False)
+    # The User's bearing at this time. Can't be None.
+    bearing: Mapped[float] = mapped_column(Numeric(8,5), nullable = False)
     # The User's speed at this time. Can't be None.
     speed: Mapped[float] = mapped_column(Numeric(8, 5), nullable = False)
 
