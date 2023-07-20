@@ -419,11 +419,23 @@ class LoadedTrack():
         self.track_hash = hashlib.blake2b(hash_contents, digest_size = 32).hexdigest().lower()
         # Create a transformer in the class.
         self._transformer = pyproj.Transformer.from_crs(4326, config.WORLD_CONFIGURATION_CRS, always_xy = True)
+        # Get the first two points from the first segment.
+        first_two_geodetic_coords = self.segments[0].points[:2]
+        # Fail if there are not two points.
+        if len (first_two_geodetic_coords) != 2:
+            """TODO: handle properly."""
+            raise NotImplementedError("Failed to load a new track; failed to get first two points from first segment! Also this is not handled.")
         # Get the very first point, from the very first segment; this will become the start point.
-        first_track_point = self.segments[0].points[0]
-        # Create a Shapely point, in EPSG 4326, then transform that to the designated CRS.
-        start_point = shapely.geometry.Point(first_track_point.longitude, first_track_point.latitude)
-        self.start_point = shapely.ops.transform(self._transformer.transform, start_point)
+        first_track_point = first_two_geodetic_coords[0]
+        second_track_point = first_two_geodetic_coords[1]
+        # Create a Shapely point, in EPSG 4326, then transform that to the designated CRS. Always in XY (long/lat) format.
+        geodetic_start_point = shapely.geometry.Point(first_track_point.longitude, first_track_point.latitude)
+        self.start_point = shapely.ops.transform(self._transformer.transform, geodetic_start_point)
+        # Now, determine the forward azimuth from the start point to the second track point.
+        geodesic = pyproj.Geod(ellps = "WGS84")
+        fwd_azimuth, back_azimuth, distance = geodesic.inv(first_track_point.longitude, first_track_point.latitude, second_track_point.longitude, second_track_point.latitude)
+        # Save the forward azimuth.
+        self.start_point_bearing = fwd_azimuth
 
     def get_multi_linestring(self):
         """Get a multilinestring representing the entire track. Each linestring itself represents a single track segment."""
@@ -685,13 +697,18 @@ def create_track(loaded_track, **kwargs) -> CreatedTrack:
             raise NotImplementedError("Failed to create a new track, CIRCUIT types are not yet supported.")
         else:
             raise NotImplementedError(f"Failed to create a new track, track type integer {loaded_track.track_type} is not recognised as a track type.")
+        # Set whether this track should be verified.
         new_track.set_verified(is_verified)
+        # Set whether this track has already been snapped to roads.
         new_track.set_snapped_to_roads(is_snapped_to_roads)
+        # Set the track's path.
         new_track.set_path(track_path)
         # We will use the very first point from the very first segment to represent the start point. So set this as the position on the Track.
         start_point = loaded_track.start_point
         new_track.set_crs(config.WORLD_CONFIGURATION_CRS)
         new_track.set_position(start_point)
+        # Set the start point bearing.
+        new_track.set_start_bearing(loaded_track.start_point_bearing)
         # This process is now complete. Add the track and the track path to the database, and flush them.
         db.session.add_all([new_track, track_path])
         db.session.flush()

@@ -441,8 +441,10 @@ class TrackUserRace(db.Model, LineStringGeometryMixin):
     fake: Mapped[bool] = mapped_column(nullable = False, default = False)
 
     ### Some race values, these are updated while the race is ongoing. ###
-    # Average speed, in meters per hour. Can be None.
+    # Average speed, in meters per second. Can be None.
     average_speed: Mapped[int] = mapped_column(nullable = True, default = None)
+    # The total percent of this race attempt that was missed; that is, where the track has been dodged. This applies to both sprint and circuit races. Can't be None and is 0 by default.
+    percent_missed: Mapped[int] = mapped_column(nullable = False, default = 0)
     # Percent of the track complete, only applies to Sprint type tracks. Can be None.
     percent_complete: Mapped[int] = mapped_column(nullable = True, default = None)
     # Number of laps complete, only applies to Circuit type tracks. Can be None.
@@ -574,7 +576,7 @@ class TrackUserRace(db.Model, LineStringGeometryMixin):
         self.cancelled = True
 
     def set_average_speed(self, average_speed):
-        """Set this race's average speed."""
+        """Set this race's average speed, in meters per second."""
         self.average_speed = average_speed
 
     def set_num_laps_complete(self, num_laps_complete):
@@ -584,6 +586,10 @@ class TrackUserRace(db.Model, LineStringGeometryMixin):
     def set_percent_complete(self, percent_complete):
         """Set the percent of the track complete."""
         self.percent_complete = percent_complete
+
+    def set_percent_missed(self, percent_missed):
+        """Set the percent of the race/race track that has been missed. This is judged differently overall for the various types of track types."""
+        self.percent_missed = percent_missed
 
     def add_location(self, location):
         """Add the location as progress."""
@@ -630,6 +636,11 @@ class TrackPath(db.Model, MultiLineStringGeometryMixin):
         """Returns the track path's UID, for now, this is just the Track's UID."""
         return self.track.uid
     
+    @property
+    def length(self):
+        """Returns the total length of this track, in meters."""
+        return int(self.multi_linestring.length)
+
     @property
     def start_point(self):
         """Return the Shapely Point at the very start of the track, or None if not yet set."""
@@ -722,6 +733,8 @@ class Track(db.Model, PointGeometryMixin):
     description: Mapped[str] = mapped_column(String(256), nullable = False)
     # The track's type. Can't be None.
     track_type: Mapped[int] = mapped_column(nullable = False)
+    # The track's start point bearing, in degrees. This is the direction in which the Player must face in order to race. Can't be None.
+    start_bearing: Mapped[float] = mapped_column(nullable = False)
     # Whether this track's path has been processed and snap-to-roads has been executed on it (or if this process was skipped.) Default is not REQUIRE_SNAP_TO_ROADS. Can't be None.
     snapped_to_roads: Mapped[bool] = mapped_column(nullable = False, default = not config.REQUIRE_SNAP_TO_ROADS)
     # Whether this track has been verified; meaning administrators have approved it. Default is False, can't be None.
@@ -785,6 +798,11 @@ class Track(db.Model, PointGeometryMixin):
         return self.verified
     
     @property
+    def length(self):
+        """Return the length of the track."""
+        return self.path.length
+    
+    @property
     def has_owner(self):
         """Returns True if this Track has an owner."""
         return self.user != None
@@ -811,7 +829,7 @@ class Track(db.Model, PointGeometryMixin):
     
     @property
     def path(self):
-        """Return the track's path."""
+        """Return the track's path, as an instance."""
         return self.path_
 
     def set_name(self, name):
@@ -825,6 +843,10 @@ class Track(db.Model, PointGeometryMixin):
     def set_track_type(self, track_type):
         """Set this track's type."""
         self.track_type = track_type
+
+    def set_start_bearing(self, start_bearing):
+        """Set this track's start bearing, should be degrees."""
+        self.start_bearing = start_bearing
 
     def set_num_laps_required(self, num_laps_required):
         """Set the number of laps required for this Track."""
@@ -955,9 +977,7 @@ class UserLocationRace(db.Model):
     __table_args__ = (
         ForeignKeyConstraint(
             ["race_track_id", "race_user_id", "race_uid"],
-            ["track_user_race.track_id", "track_user_race.user_id", "track_user_race.uid"]
-        ),
-    )
+            ["track_user_race.track_id", "track_user_race.user_id", "track_user_race.uid"],),)
 
 
 class UserLocation(db.Model, PointGeometryMixin):
@@ -974,7 +994,7 @@ class UserLocation(db.Model, PointGeometryMixin):
     logged_at: Mapped[int] = mapped_column(BigInteger, nullable = False)
     # The User's bearing at this time. Can't be None.
     bearing: Mapped[float] = mapped_column(Numeric(8,5), nullable = False)
-    # The User's speed at this time. Can't be None.
+    # The User's speed at this time; in meters per second. Can't be None.
     speed: Mapped[float] = mapped_column(Numeric(8, 5), nullable = False)
 
     # A UserLocation can also potentially belong to a single TrackUserRace instance, meaning that this user location was logged while
@@ -990,6 +1010,233 @@ class UserLocation(db.Model, PointGeometryMixin):
 
     def __repr__(self):
         return f"UserLocation<{self.user}>"
+
+
+class VehicleType(db.Model):
+    """A general overview of a specific type of vehicle such as a Car or Bike."""
+    __tablename__ = "vehicle_type"
+
+    type_id: Mapped[str] = mapped_column(String(32), primary_key = True)
+
+    # The name of this vehicle type. Can't be None; this is also unique.
+    name: Mapped[str] = mapped_column(String(32), unique = True, nullable = False)
+    # The description of this vehicle type. Can't be None.
+    description: Mapped[str] = mapped_column(Text(), nullable = False)
+    
+    # A dynamic relationship to all models associated with this type- no filtration on make.
+    models_: Mapped[List["VehicleModel"]] = relationship(
+        back_populates = "type",
+        uselist = True,
+        lazy = "dynamic")
+
+    def __repr__(self):
+        return f"VehicleType<{self.name}>"
+
+
+class VehicleYear(db.Model):
+    """A single year of vehicles."""
+    __tablename__ = "vehicle_year"
+
+    year_: Mapped[int] = mapped_column(primary_key = True)
+
+    def __repr__(self):
+        return f"VehicleYear<{self.year_}>"
+    
+    @property
+    def year(self):
+        return self.year_
+
+
+class VehicleMake(db.Model):
+    """A single vehicle make, that can refer to many vehicle models."""
+    __tablename__ = "vehicle_make"
+
+    uid: Mapped[str] = mapped_column(String(128), primary_key = True)
+
+    # The name of this vehicle make. Can't be None; this is also unique.
+    name: Mapped[str] = mapped_column(String(48), nullable = False)
+    
+    # A dynamic relationship to all models associated with this make- no filtration on type.
+    models_: Mapped[List["VehicleModel"]] = relationship(
+        back_populates = "make",
+        uselist = True,
+        lazy = "dynamic")
+
+    def __repr__(self):
+        return f"VehicleMake<{self.name}>"
+
+
+class VehicleModel(db.Model):
+    """A single vehicle model, which is owned by a single vehicle make, and is differentiated by its name and type. This is where we can abstract a single make
+    also producing cars if they're primarily a bike producer etc."""
+    __tablename__ = "vehicle_model"
+
+    uid: Mapped[str] = mapped_column(String(128), primary_key = True)
+    # The vehicle model's make UID. This can't be None.
+    make_uid: Mapped[str] = mapped_column(String(128), ForeignKey("vehicle_make.uid"), nullable = False)
+    # The vehicle type's ID. This can't be None.
+    type_id: Mapped[str] = mapped_column(String(32), ForeignKey("vehicle_type.type_id"), nullable = False)
+
+    # The name of this vehicle make. Can't be None; this is also unique.
+    name: Mapped[str] = mapped_column(String(48), nullable = False)
+    
+    # Relationship to the vehicle type for this model. This is eager.
+    type: Mapped[VehicleType] = relationship(
+        back_populates = "models_",
+        uselist = False)
+    # Relationship to the vehicle make for this model. This is eager.
+    make: Mapped[VehicleMake] = relationship(
+        back_populates = "models_",
+        uselist = False)
+    # A dynamic relationship to all available year models for this vehicle model.
+    year_models_: Mapped[List["VehicleYearModel"]] = relationship(
+        back_populates = "model",
+        uselist = True,
+        lazy = "dynamic")
+
+    def __repr__(self):
+        return f"VehicleModel<{self.name},mk={self.make.name}>"
+
+
+class VehicleYearModel(db.Model):
+    """A single vehicle year model, owned by a single vehicle model; this entity centralises all individually optioned stock vehicles for a specific model and year."""
+    __tablename__ = "vehicle_year_model"
+
+    # The primary key for the vehicle year model is a composite made up of make UID, model UID and the year.
+    # The make's UID, referring to VehicleMake. This can't be None.
+    make_uid: Mapped[str] = mapped_column(String(128), ForeignKey("vehicle_make.uid"), primary_key = True)
+    # The model's UID, referring to VehicleModel. This can't be None.
+    model_uid: Mapped[str] = mapped_column(String(128), ForeignKey("vehicle_model.uid"), primary_key = True)
+    # The year, referring to VehicleYear. This can't be None.
+    year_: Mapped[int] = mapped_column(ForeignKey("vehicle_year.year_"), primary_key = True)
+
+    # An eager relationship to this year model's make. This does not back populate.
+    make: Mapped[VehicleMake] = relationship(
+        uselist = False)
+    # An eager relationship to this year model's model. This does not back populate.
+    model: Mapped[VehicleModel] = relationship(
+        uselist = False)
+    # A dynamic relationship to all stock vehicles attached to this vehicle year model. These are essentially separate optioned loadouts from that year.
+    stock_vehicles_: Mapped[List["VehicleStock"]] = relationship(
+        back_populates = "year_model",
+        uselist = True,
+        lazy = "dynamic")
+
+    def __repr__(self):
+        return f"VehicleYearModel<{self.year_},mdl={self.make.name} {self.model.name}>"
+    
+    @property
+    def year(self):
+        return self.year_
+
+
+class VehicleStock(db.Model):
+    """A single stock vehicle. These UIDs can be thought of as associating with a single specific vehicle."""
+    __tablename__ = "vehicle_stock"
+
+    # The vehicle stock's UID.
+    vehicle_uid: Mapped[str] = mapped_column(String(128), primary_key = True)
+    # A composite foreign key to the vehicle year model entity. None of these can be None.
+    year_model_make_uid: Mapped[str] = mapped_column(String(128), nullable = False)
+    year_model_model_uid: Mapped[str] = mapped_column(String(128), nullable = False)
+    year_model_year_: Mapped[int] = mapped_column(nullable = False)
+
+    # The vehicle stock's version. Can be None.
+    version: Mapped[str] = mapped_column(nullable = True, default = None)
+    # The vehicle stock's badge. Can be None.
+    badge: Mapped[str] = mapped_column(nullable = True, default = None)
+
+    # General motor type; piston, electric, rotary. This can't be None, and should be one of 'piston', 'rotary', 'hybrid' or 'electric'.
+    motor_type: Mapped[str] = mapped_column(nullable = False)
+
+    ### Specifics for Piston/Rotary types. ###
+    # The displacement, in CC. Can be None.
+    displacement: Mapped[int] = mapped_column(nullable = True)
+    # The induction type. Can be None.
+    induction_type: Mapped[str] = mapped_column(nullable = True)
+    # The fuel type. Can be None.
+    fuel_type: Mapped[str] = mapped_column(nullable = True)
+
+    ### Specifics for Electric types. ###
+    # The amount of power this motor produces. Can be None.
+    power: Mapped[int] = mapped_column(nullable = True)
+    # The type of electric motor(s). Can be None.
+    electric_motor_type: Mapped[str] = mapped_column(nullable = True)
+
+    ### Transmission information. ###
+    # The transmission type. Can't be None.
+    transmission_type: Mapped[str] = mapped_column(nullable = False)
+    # The number of gears in this transmission. Can't be None.
+    num_gears: Mapped[int] = mapped_column(nullable = False)
+
+    # Association proxy through year model to the vehicle Make entity.
+    make: AssociationProxy[VehicleMake] = association_proxy("year_model", "make")
+    # Association proxy through year model to the vehicle Model entity.
+    model: AssociationProxy[VehicleModel] = association_proxy("year_model", "model")
+    # An eager relationship to the year model entity to which this stock vehicle belongs.
+    year_model: Mapped[VehicleYearModel] = relationship(
+        back_populates = "stock_vehicles_",
+        uselist = False)
+    
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["year_model_make_uid", "year_model_model_uid", "year_model_year_"], 
+            ["vehicle_year_model.make_uid", "vehicle_year_model.model_uid", "vehicle_year_model.year_"],),)
+    
+    def __repr__(self):
+        return f"VehicleStock<{self.title}>"
+
+    @property
+    def title(self):
+        """Return a central 'title' for this stock vehicle. This should be a displayable text that uniquely identifies this vehicle and perhaps some of the
+        more important options that separates it from the rest."""
+        return f"{self.year_model_year_} {self.make.name} {self.model.name}"
+    
+    def set_year_model(self, make_uid, model_uid, year):
+        """Set the vehicle year model to which this vehicle stock belongs."""
+        self.year_model_make_uid = make_uid
+        self.year_model_model_uid = model_uid
+        self.year_model_year_ = year
+
+    def set_version(self, version):
+        """Set this vehicle stock's version."""
+        self.version = version
+
+    def set_badge(self, badge):
+        """Set this vehicle stock's badge."""
+        self.badge = badge
+
+    def set_motor_type(self, motor_type):
+        """Set this vehicle's motor type; piston, rotary, electric etc."""
+        self.motor_type = motor_type
+    
+    def set_displacement(self, displacement_cc):
+        """Set this vehicle's displacement, in CC."""
+        self.displacement = displacement_cc
+    
+    def set_induction_type(self, induction_type):
+        """Set this vehicle's induction type."""
+        self.induction_type = induction_type
+
+    def set_fuel_type(self, fuel_type):
+        """Set this vehicle's fuel type."""
+        self.fuel_type = fuel_type
+
+    def set_power(self, power):
+        """Set this vehicle's power amount (for electric motors.)"""
+        self.power = power
+
+    def set_electric_motor_type(self, electric_motor_type):
+        """Set this vehicle's electric motor(s) type(s)."""
+        self.electric_motor_type = electric_motor_type
+
+    def set_transmission_type(self, transmission_type):
+        """Set this vehicle's transmission type."""
+        self.transmission_type = transmission_type
+
+    def set_num_gears(self, num_gears):
+        """Set the number of gears on this vehicle's transmission."""
+        self.num_gears = num_gears
 
 
 class UserVehicle(db.Model, HasUUIDMixin):
@@ -1413,7 +1660,12 @@ class ServerConfiguration(db.Model):
     __tablename__ = "server_configuration"
 
     id: Mapped[int] = mapped_column(primary_key = True)
+    # User ID for the currently configured HawkSpeed User. Can't be None.
     user_id: Mapped[int] = mapped_column(ForeignKey("user_.id"), nullable = False)
+    # The version code for the currently loaded vehicle data information. Can be None.
+    vehicle_version_code: Mapped[int] = mapped_column(nullable = True)
+    # The version for the currently loaded vehicle data information. Can be None.
+    vehicle_version: Mapped[str] = mapped_column(String(32), nullable = True)
 
     # The HawkSpeed user.
     user: Mapped[User] = relationship(
@@ -1421,6 +1673,15 @@ class ServerConfiguration(db.Model):
 
     def __repr__(self):
         return f"ServerConfiguration<{self.id}>"
+    
+    @property
+    def has_vehicle_data(self):
+        """Returns True if there is a vehicle data version currently configured on this server."""
+        return self.vehicle_version != None and self.vehicle_version_code != None
+    
+    def set_vehicle_data_version(self, version, version_code):
+        self.vehicle_version = version
+        self.vehicle_version_code = version_code
 
     @classmethod
     def new(cls):

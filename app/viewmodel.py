@@ -358,6 +358,10 @@ class LeaderboardEntryViewModel(BaseViewModel):
         finished            = fields.Int(required = True, allow_none = False)
         # The total recorded time, in milliseconds, for this race. Can't be None.
         stopwatch           = fields.Int(required = True, allow_none = False)
+        # The average speed of the Player, in meters per second for this attempt. Can be None.
+        average_speed       = fields.Int(required = True, allow_none = True)
+        # The percent of track/race that has been missed. Can't be None.
+        percent_missed      = fields.Int(required = True, allow_none = False)
         # The Player that completed this race. Can't be None.
         player              = SerialiseViewModelField(required = True, allow_none = False)
         # The vehicle this Player used to complete the race. Can't be None.
@@ -394,7 +398,17 @@ class LeaderboardEntryViewModel(BaseViewModel):
             # success will be unbounded.
             return -1
         return self.patient.stopwatch
-
+    
+    @property
+    def average_speed(self):
+        """The average speed, in meters per second, for this player."""
+        return self.patient.average_speed
+    
+    @property
+    def percent_missed(self):
+        """Return the total percent of this track/race that was missed."""
+        return self.patient.percent_missed
+    
     @property
     def vehicle(self) -> VehicleViewModel:
         """Returns a vehicle view model for the Vehicle used in the race."""
@@ -584,10 +598,14 @@ class TrackViewModel(BaseViewModel):
         ### Second, state data. ###
         # Is the track verified yet? Can't be None.
         is_verified         = fields.Bool(required = True, allow_none = False)
+        # The track's total length, in meters. Can't be None.
+        length              = fields.Int(required = True, allow_none = False)
         # Is the track snapped to roads? Can't be None.
         is_snapped_to_roads = fields.Bool(required = True, allow_none = False)
         # The track's start point. Can't be None.
         start_point         = fields.Nested(tracks.TrackPointSchema, many = False, required = True, allow_none = False)
+        # The track's start point bearing, in degrees. Can't be None.
+        start_point_bearing = fields.Decimal(as_string = True, required = True, allow_none = False)
         # What type if this track? Can't be None.
         track_type          = fields.Int(required = True, allow_none = False)
         # Applicable only to Circuit type tracks, the number of laps required. Can be None.
@@ -649,6 +667,11 @@ class TrackViewModel(BaseViewModel):
         return self.patient.is_verified
     
     @property
+    def length(self):
+        """Returns the length of the track's path."""
+        return self.patient.length
+    
+    @property
     def is_snapped_to_roads(self):
         """Return True if the track has been snapped to roads."""
         return self.patient.is_snapped_to_roads
@@ -664,7 +687,12 @@ class TrackViewModel(BaseViewModel):
             print("Start point failure")
             LOG.error(e, exc_info = True)
             raise e
-
+        
+    @property
+    def start_point_bearing(self):
+        """Return the bearing, in degrees, the Player should be facing in order to be eligible for a race."""
+        return abs(self.patient.start_bearing)
+    
     @property
     def track_type(self):
         """Returns the type of this track."""
@@ -853,6 +881,8 @@ class UserViewModel(BaseViewModel):
         uid                 = fields.Str(required = True, allow_none = False)
         # The user's username. Can't be None, since the User who is not setup should never be a result in any query done by other Users.
         username            = fields.Str(required = True, allow_none = False)
+        # The user's bio. This can be None.
+        bio                 = fields.Str(required = True, allow_none = True)
         # The user's privilege integer. Can never be None.
         privilege           = fields.Int(required = True, allow_none = False)
 
@@ -871,6 +901,10 @@ class UserViewModel(BaseViewModel):
     @property
     def username(self):
         return self.patient.username
+    
+    @property
+    def bio(self):
+        return self.patient.bio
 
     @property
     def privilege(self):
@@ -889,6 +923,24 @@ class UserViewModel(BaseViewModel):
     def is_playing(self):
         """Returns True if the User is currently playing. That is, is connected to the game."""
         return self.patient.is_playing
+    
+    @property
+    def num_tracks_top_leaderboard(self):
+        """Return the number of tracks on which this User is in the top 3 on leaderboard."""
+        """TODO: finish this."""
+        raise NotImplementedError()
+
+    @property
+    def num_tracks_raced(self):
+        """Return the number of tracks this User has completed at least once."""
+        """TODO: finish this."""
+        raise NotImplementedError()
+
+    @property
+    def vehicles(self):
+        """Return this User's vehicles as a view model list; as long as the actor is permitted to do so."""
+        """TODO: permission checks here."""
+        return ViewModelList.make(self.patient.all_vehicles, self.actor, VehicleViewModel)
     
     def serialise(self, **kwargs):
         """Serialise and return a UserViewSchema representing the view relationship between the actor entity and the patient User.

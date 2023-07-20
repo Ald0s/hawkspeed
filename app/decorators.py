@@ -105,7 +105,6 @@ def get_user(**kwargs):
     required = kwargs.get("required", True)
 
     def decorator(f):
-        @account_setup_required()
         @wraps(f)
         def decorated_view(*args, **kwargs):
             # Get the incoming User UID.
@@ -114,7 +113,7 @@ def get_user(**kwargs):
             user = users.find_existing_user(
                 user_uid = user_uid)
             # If no User found, raise an error.
-            if not user:
+            if not user and required:
                 """TODO: handle this properly."""
                 raise NotImplementedError("Could not find user by UID in decorator. This is not handled either.")
             # Finally, pass the User back via output key.
@@ -133,13 +132,14 @@ def get_track(**kwargs):
     -----------------
     :track_uid_key: The key under which the UID for the track to be grabbed. Default is 'track_uid'.
     :track_output_key: The key under which the located track should be passed. Default is 'track'.
-    :should_belong_to_user: True if the track should belong to the current User, or raise an exception if it does not. Default is True."""
+    :should_belong_to_user: True if the track should belong to the current User, or raise an exception if it does not. Default is True.
+    :required: A boolean; True if the route should fail if the Track not found. Default is True."""
     track_uid_key = kwargs.get("track_uid_key", "track_uid")
     track_output_key = kwargs.get("track_output_key", "track")
     should_belong_to_user = kwargs.get("should_belong_to_user", True)
+    required = kwargs.get("required", True)
 
     def decorator(f):
-        @account_setup_required()
         @wraps(f)
         def decorated_view(*args, **kwargs):
             # Get the incoming track UID.
@@ -148,7 +148,7 @@ def get_track(**kwargs):
             track = tracks.find_existing_track(
                 track_uid = track_uid)
             # If no track found, raise an error.
-            if not track:
+            if not track and required:
                 """TODO: handle this properly."""
                 raise NotImplementedError("Could not find track by UID in decorator. This is not handled either.")
             # Otherwise, if it should belong to User and it doesn't raise.
@@ -176,16 +176,15 @@ def get_race(**kwargs):
     required = kwargs.get("required", True)
 
     def decorator(f):
-        @account_setup_required()
         @wraps(f)
         def decorated_view(*args, **kwargs):
             # Get the incoming Race UID.
             race_uid = kwargs.get(race_uid_key, None)
             # Attempt to find the Race.
-            race = races.find_existing_user(
+            race = races.get_race(
                 race_uid = race_uid)
             # If no Race found, raise an error.
-            if not race:
+            if not race and required:
                 """TODO: handle this properly."""
                 raise NotImplementedError("Could not find race by UID in decorator. This is not handled either.")
             # Finally, pass the Race back via output key.

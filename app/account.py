@@ -11,7 +11,7 @@ from email_validator import validate_email, EmailNotValidError
 from password_strength import PasswordPolicy
 from marshmallow import Schema, fields, EXCLUDE, post_load, ValidationError, validates, pre_load
 
-from . import db, config, models, users, decorators, error
+from . import db, config, models, vehicles, decorators, error
 
 LOG = logging.getLogger("hawkspeed.account")
 LOG.setLevel( logging.DEBUG )
@@ -195,7 +195,7 @@ class RequestSetupProfileSchema(Schema):
     #profile_image           = media.MediaField(allow_none = True)
     username                = fields.Str(required = True, allow_none = False)
     bio                     = fields.Str(load_default = "", allow_none = True)
-    vehicle                 = fields.Nested(users.RequestCreateVehicleSchema, many = False, required = True, allow_none = False)
+    vehicle                 = fields.Nested(vehicles.RequestCreateVehicleSchema, many = False, required = True, allow_none = False)
 
     @validates("username")
     def validate_username(self, value):
@@ -461,7 +461,7 @@ def setup_account_profile(user, request_setup_profile, **kwargs) -> models.User:
         # Set the user's bio.
         user.set_bio(request_setup_profile.bio)
         # Create a vehicle for the User.
-        users.create_vehicle(request_setup_profile.vehicle,
+        vehicles.create_vehicle(request_setup_profile.vehicle,
             user = user)
         # Set profile setup.
         user.set_profile_setup(True)

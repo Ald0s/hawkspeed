@@ -4,7 +4,7 @@ import os
 import random
 from datetime import datetime, date
 
-from app import db, config, models, users, error
+from app import db, config, models, users, vehicles, error
 
 LOG = logging.getLogger("hawkspeed.factory")
 LOG.setLevel( logging.DEBUG )
@@ -65,7 +65,7 @@ def get_random_user(**kwargs) -> models.User:
         verified = verified,
         profile_setup = setup)
     # Create the first vehicle for the User.
-    users.create_vehicle(users.RequestCreateVehicle(text = vehicle),
+    vehicles.create_vehicle(vehicles.RequestCreateVehicle(text = vehicle),
         user = new_user)
     # Set a bad password.
     new_user.set_password("password")
@@ -117,7 +117,7 @@ def create_user(email_address, password, **kwargs) -> models.User:
     else:
         LOG.debug(f"Did not set username for new user {email_address}, they are not setup.")
     if vehicle:
-        users.create_vehicle(users.RequestCreateVehicle(text = vehicle),
+        vehicles.create_vehicle(vehicles.RequestCreateVehicle(text = vehicle),
             user = new_user)
     LOG.debug(f"New account created; {new_user}")
     db.session.add(new_user)

@@ -9,7 +9,7 @@ from flask import request
 from flask_login import current_user, logout_user, login_required
 from marshmallow import ValidationError
 
-from .. import db, config, models, decorators, error, account, tracks, viewmodel
+from .. import db, config, models, decorators, error, account, tracks, vehicles, viewmodel
 from . import api
 
 LOG = logging.getLogger("hawkspeed.api.routes")
@@ -117,6 +117,44 @@ def check_username_taken(username, **kwargs):
         raise e
 
 
+@api.route("/api/v1/vehicles/stock", methods = [ "GET" ])
+@decorators.login_required()
+def vehicles_stock_search(**kwargs):
+    """Allows the User to search through HawkSpeed's database of Vehicles for a particular vehicle stock entity. This can then be used to create a new Vehicle. In order to
+    interact with this route, read below the recipies for a specific return type that you may want. These arguments are to be given in order:
+    1. No arguments; this will return all makes available,
+    2. Make UID; this will return all types within the requested Make,
+    3. Make UID, Type; this will return all models within the requested Make and of the requested Type,
+    4. Make UID, Type, Model UID; this will return all years within the requested Make and of the requested Type from the requested Model,
+    5. Make UID, Type, Model UID, Year; this will return all stock vehicles within the requested Make and of the requested Type from the requested Model in the requested Year.
+
+    The response type will be a paagination response, containing the desired page, an indication of the current and next pages."""
+    try:
+        # Read the page.
+        page = int(request.args.get("p", 1))
+        # Now, read all arguments.
+        make_uid = request.args.get("mk", None)
+        type_id = request.args.get("t", None)
+        model_uid = request.args.get("mdl", None)
+        year = request.args.get("y", None)
+        # Attempt to locate a set of entities given this criteria, then simply serialise and return them.
+        LOG.debug(f"{current_user} is attempting to locate vehicle fragments with args; make={make_uid},type={type_id},model={model_uid},year={year}")
+        # Assemble a query for the next vehicle type. We will receive back the query itself and the schema for serialising the object of type return.
+        # Call paginate function on this query, to receive a Pagination object.
+        search_vehicles_q, SerialiseCls = vehicles.search_vehicles_with_schema(
+            make_uid = make_uid, type_id = type_id, model_uid = model_uid, year = year)
+        # Now, we will create a pagination object from the result of this query.
+        search_vehicle_stock_pagination = search_vehicles_q\
+            .paginate(page = page, per_page = config.PAGE_SIZE_VEHICLES, max_per_page = config.PAGE_SIZE_VEHICLES, error_out = False)
+        # Make a serialisation pagination object, supplying the SerialiseCls as the schema through which objects should be serialised.
+        serialisation_pagination = viewmodel.SerialisablePagination.make(search_vehicle_stock_pagination,
+            SerialiseViaSchemaCls = SerialiseCls)
+        LOG.debug(f"Located {serialisation_pagination.num_in_page} items.")
+        return serialisation_pagination.as_paged_response(), 200
+    except Exception as e:
+        raise e
+    
+
 @api.route("/api/v1/setup", methods = [ "POST" ])
 @decorators.login_required()
 def setup_profile(**kwargs):
@@ -156,18 +194,43 @@ def get_user(user, **kwargs):
         raise e
     
 
-@api.route("/api/v1/vehicles", methods = [ "GET" ])
+@api.route("/api/v1/vehicles", methods = [ "GET" ], endpoint = "get_our_vehicles")
+@api.route("/api/v1/user/<user_uid>/vehicles", methods = [ "GET" ], endpoint = "get_vehicles_for")
 @decorators.account_setup_required()
-def get_our_vehicles(**kwargs):
-    """Perform a request for the current User's list of Vehicles. This function will return an object containing a list of serialised vehicle
-    view models if successful. This is not a pagination route."""
+@decorators.get_user(required = False)
+def get_vehicles(user = None, **kwargs):
+    """Perform a request for the current User's list of Vehicles. If current User's vehicles are requested, this function will return
+    an object containing a list of serialised vehicle view models on success. If a specific User's vehicles are requested, this function
+    will return an object containing that User and their vehicles on success. This is not a pagination route."""
     try:
-        # Build an Account view model for the current User.
-        account_view_model = viewmodel.AccountViewModel(current_user)
-        # Get a view model list for the Vehicles on this account.
-        vehicles_vml = account_view_model.vehicles
-        # Now, return a successful response with just the list of vehicles.
-        return vehicles_vml.as_dict(), 200
+        # If user is None, get current User's vehicles.
+        if not user:
+            # Build an Account view model for the current User.
+            account_view_model = viewmodel.AccountViewModel(current_user)
+            # Get a view model list for the Vehicles on this account.
+            vehicles_vml = account_view_model.vehicles
+            # Now, return a successful response with just the list of vehicles.
+            return vehicles_vml.as_dict(), 200
+        else:
+            # Otherwise, if we have a User, we'll request a User view model for that User.
+            user_view_model = viewmodel.UserViewModel(current_user, user)
+            # Get this User's vehicles.
+            vehicles_vml = user_view_model.vehicles
+            # Now, return a successful response with both the list of vehicles and the given User.
+            return vehicles_vml.as_dict(base_dict = dict(
+                user = user_view_model.serialise())), 200
+    except Exception as e:
+        raise e
+    
+
+@api.route("/api/v1/user/<user_uid>/races", methods = [ "GET" ])
+@decorators.account_setup_required()
+@decorators.get_user()
+def get_user_races(user, **kwargs):
+    """Perform a GET request along with pagination arguments to page the given User's race attempts. Optionally, filter arguments can also be supplied.
+    The result of this route, on success, is a pagination response containing the page of items, current page and next page."""
+    try:
+        raise NotImplementedError()
     except Exception as e:
         raise e
     

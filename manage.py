@@ -10,7 +10,7 @@ import flask_socketio
 from flask import current_app
 from sqlalchemy_utils import create_database, database_exists
 
-from app import create_app, db, config, models, decorators, error, factory, tracks
+from app import create_app, db, config, models, decorators, error, factory, tracks, vehicles
 
 LOG = logging.getLogger("hawkspeed.manage")
 LOG.setLevel( logging.DEBUG )
@@ -34,6 +34,16 @@ def init_db():
         LOG.debug(f"Creating a new ServerConfiguration instance - it does not exist yet.")
         models.ServerConfiguration.new()
     db.session.flush()
+    db.session.commit()
+
+
+@application.cli.command("import-vehicle-data", help = "Imports all vehicle data.")
+@decorators.get_server_configuration()
+def import_vehicle_data(server_configuration, **kwargs):
+    # Simply load vehicle data from the vehicles JSON.
+    vehicles.load_vehicle_data_from("vehicles.json",
+        server_configuration = server_configuration)
+    # Commit.
     db.session.commit()
 
 

@@ -63,8 +63,8 @@ class BaseConfig(private.PrivateBaseConfig, RaceConfigurationMixin, TrackConfigu
     #SERVER_NAME = f"127.0.0.1:{PORT}"
     SERVER_URL = "http://192.168.0.253:5000"
 
-    SERVER_VERSION_TEXT = "0.01.01"
-    SERVER_VERSION_CODE = 9
+    SERVER_VERSION_TEXT = "0.01.02"
+    SERVER_VERSION_CODE = 10
 
     # Streaming configuration.
     MAX_CONTENT_LENGTH = 16 * 1024 * 1024 # 16 MB
@@ -92,6 +92,7 @@ class BaseConfig(private.PrivateBaseConfig, RaceConfigurationMixin, TrackConfigu
 
     PAGE_SIZE_LEADERBOARD = 20
     PAGE_SIZE_COMMENTS = 15
+    PAGE_SIZE_VEHICLES = 25
 
     def __init__(self):
         self.make_dirs()

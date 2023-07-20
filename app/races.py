@@ -342,9 +342,9 @@ def update_race_participation_for(user, player_update_result, **kwargs) -> Updat
         if verify_progress_result.is_finished:
             # The race has been finished successfully. We will now set the ongoing race's finished parameter to the time logged in latest Player update.
             ongoing_race.set_finished(verify_progress_result.time_finished)
-            return UpdateRaceParticipationResult(ongoing_race)#return UpdateRaceParticipationResult(True, ongoing_race)
+            return UpdateRaceParticipationResult(ongoing_race)
         # Otherwise, race is not finished just yet, return a negative result.
-        return UpdateRaceParticipationResult(ongoing_race)#return UpdateRaceParticipationResult(False, ongoing_race)
+        return UpdateRaceParticipationResult(ongoing_race)
     except RaceDisqualifiedError as rde:
         # The race must be disqualified. Call the disqualification procedure.
         ongoing_race = disqualify_ongoing_race(rde.user, rde.dq_code,
@@ -486,9 +486,15 @@ class VerifyRaceProgressResult():
         """TODO: when we implement circuits, this should be moved."""
         return self._percent_complete
     
-    def __init__(self, _is_finished, _percent_complete, **kwargs):
+    @property
+    def percent_missed(self):
+        """Return the total percent of this track that has been missed."""
+        return self._percent_missed
+    
+    def __init__(self, _is_finished = False, _percent_complete = 0, _percent_missed = 0, **kwargs):
         self._is_finished = _is_finished
         self._percent_complete = _percent_complete
+        self._percent_missed = _percent_missed
         self._time_finished = kwargs.get("time_finished", None)
 
 
@@ -505,7 +511,7 @@ def _verify_race_progress(user, track_user_race, player_update_result, **kwargs)
     try:
         # If the race does not yet have progress, silently return.
         if not track_user_race.has_progress:
-            return VerifyRaceProgressResult(False, 0)
+            return VerifyRaceProgressResult()
         user_location = player_update_result.user_location
         # Calculate and validate progress thus far.
         race_progress_result = _calculate_validate_progress(track_user_race, user_location)
@@ -515,11 +521,11 @@ def _verify_race_progress(user, track_user_race, player_update_result, **kwargs)
         # Finally, we'll determine if the Player has finished the course. Currently, we'll do this by just ensuring the finish point is within the progress polygon.
         if race_progress_result.is_race_finished:
             # Return a race progress result where we declare the race is finished.
-            return VerifyRaceProgressResult(True, 0, 
+            return VerifyRaceProgressResult(True, 100, race_progress_result.percent_track_missed, 
                 time_finished = user_location.logged_at)
         else:
             LOG.debug(f"{track_user_race} is not finished ({race_progress_result.percent_complete}% complete)")
-        return VerifyRaceProgressResult(False, 0)
+        return VerifyRaceProgressResult(False, race_progress_result.percent_complete, race_progress_result.percent_track_missed)
     except PlayerDodgedTrackError as pdte:
         LOG.warning(f"Disqualifying race {track_user_race}, the Player has dodged too much of the track. ({pdte.percent_dodged}%)")
         raise RaceDisqualifiedError(user, track_user_race,
@@ -529,7 +535,8 @@ def _verify_race_progress(user, track_user_race, player_update_result, **kwargs)
 
 
 def _update_race_averages(player_update_result, verify_progress_result, track_user_race, **kwargs):
-    """Update the given race's average values based on the latest update. This function will update all values, but will not return any values.
+    """Update the given race's average values based on the latest update. This function is track type agnostic and will therefore handle the updating of all track
+    types and their respective progress. Ensure progress result object passed is compatible. This function will update all values, but will not return any values.
 
     Arguments
     ---------
@@ -542,6 +549,8 @@ def _update_race_averages(player_update_result, verify_progress_result, track_us
         # Calculate and set the average speed.
         average_speed = int(sum(race_speeds) / len(race_speeds))
         track_user_race.set_average_speed(average_speed)
+        # Now set the percent of track that has been missed.
+        track_user_race.set_percent_missed(verify_progress_result.percent_missed)
         # Now, differentiate between sprints and circuits.
         if track_user_race.track.is_sprint:
             # If this is a sprint, we'll update percent complete.
@@ -575,6 +584,11 @@ class RaceProgressResult():
         """The percent of track remaining; this is simply 100 minus complete."""
         return 100-self.percent_complete
     
+    @property
+    def percent_track_missed(self):
+        """The percent of race/track that has been dodged."""
+        return self._percent_track_missed
+    
     def __init__(self, _is_race_finished, _progress_linestring, _track_path_linestring, _missed_track_linestrings):
         self.is_race_finished = _is_race_finished
         self._track_path_linestring = _track_path_linestring
@@ -582,7 +596,7 @@ class RaceProgressResult():
         # Now, the list of missed track linestrings are those we will check against the track overall for disqualification. Sum the lengths of them all.
         self.meters_missed_track = sum([ls.length for ls in self._missed_track_linestrings])
         # Calculate percent missed too.
-        self.percent_track_missed = int((self.meters_missed_track/_track_path_linestring.length) * 100)
+        self._percent_track_missed = int((self.meters_missed_track/_track_path_linestring.length) * 100)
         # Calculate percent complete, which currently is progress linestring's length as a percent of the track path's linestring.
         """TODO: this is not precise, improve this; especially if Player missed sections."""
         self.percent_complete = int((_progress_linestring.length/_track_path_linestring.length) * 100)
@@ -593,7 +607,7 @@ class SprintRaceProgressResult(RaceProgressResult):
     @property
     def percent_remaining(self):
         """The percent of track remaining; this is simply 100 minus complete."""
-        return 100 - self._percent_complete
+        return 100-self._percent_complete
     
     @property
     def percent_complete(self):
@@ -606,7 +620,7 @@ class SprintRaceProgressResult(RaceProgressResult):
         # Now, the list of missed track linestrings are those we will check against the track overall for disqualification. Sum the lengths of them all.
         self.meters_missed_track = sum([ls.length for ls in self._missed_track_linestrings])
         # Calculate percent missed too.
-        self.percent_track_missed = int((self.meters_missed_track/_track_path_linestring.length) * 100)
+        self._percent_track_missed = int((self.meters_missed_track/_track_path_linestring.length) * 100)
         # Calculate percent complete, which currently is progress linestring's length as a percent of the track path's linestring.
         """TODO: this is not precise, improve this; especially if Player missed sections."""
         self._percent_complete = int((_progress_linestring.length/_track_path_linestring.length) * 100)

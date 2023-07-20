@@ -68,3 +68,14 @@
 * Added API route for querying a race leaderboard entry,
 * Added not-None checks to all functions responsible for finding artefacts, to avoid first() returning the first artefact in db without arguments,
 * Changed LeaderboardEntryViewModel to enforce type strictness on patient, also enforce patients to be successfully completed race instances.
+
+## Version 0.01.02
+* Added a start_bearing attribute, which is the required bearing in degrees the Player should face in order to be eligible for the race,
+* Added support for selecting proper attributes for user vehicles, organised by specific option and year model etc- sourced from a private project of mine,
+* Added percent track missed to TrackUserRace so this can be sent alongside leaderboard entries,
+* Added percent missed and average speed to leaderboard entry view model,
+* Added vehicles module for managing user vehicles,
+* Somehow missed adding bio to User's view model; corrected this now,
+* Removed account_setup_required decorator from most object related decorators, since it is possible for unauthenticated users to query this data. Please ensure endpoint is decorated with account_setup_required to enforce this,
+* Added a separate vehicles route for getting the current user's vehicles and a desired User's vehicles,
+* Added stub API function for querying a User's races.

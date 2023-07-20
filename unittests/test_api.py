@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta
 from flask import url_for
 from unittests.conftest import BaseAPICase
 
-from app import db, config, factory, models, login_manager, users
+from app import db, config, factory, models, login_manager, users, vehicles
 
 
 class TestLoginLogout(BaseAPICase):
@@ -261,6 +261,35 @@ class TestUserAPI(BaseAPICase):
     def test_get_user(self):
         """"""
         self.assertEqual(True, False)
+    
+    def test_get_user_races(self):
+        """"""
+        self.assertEqual(True, False)
+
+
+class TestVehicleAPI(BaseAPICase):
+    def test_get_vehicles(self):
+        """Test the API for getting a User's current list of Vehicles.
+        Create two new Users each with a vehicle.
+        Authenticate as the first User, then perform a request for all the other User's vehicles.
+        Ensure response was successful, and JSON response contains a single Vehicle. Ensure that Vehicle's UID matches the first User's Vehicle."""
+        # Create a User.
+        aldos = factory.create_user("alden@mail.com", "password",
+            username = "alden", vehicle = "1994 Toyota Supra")
+        emily = factory.create_user("emily@mail.com", "password",
+            username = "emily", vehicle = "1999 Mazda MX-5")
+        db.session.flush()
+        # Get all vehicles from emily.
+        all_vehicles = emily.all_vehicles
+        # Now, authenticate as the first User.
+        with self.app.test_client(user = aldos) as client:
+            # Perform a request for emily's vehicles. Ensure its response is 200, then get its JSON.
+            vehicles_response = client.get(url_for("api.get_vehicles_for", user_uid = emily.uid))
+            self.assertEqual(vehicles_response.status_code, 200)
+            vehicles_json = vehicles_response.json
+            # Ensure there's one item in response, and that one item's UID matches the first item in all vehicles list.
+            self.assertEqual(len(vehicles_json["items"]), 1)
+            self.assertEqual(vehicles_json["items"][0]["uid"], all_vehicles[0].uid)
 
     def test_get_our_vehicles(self):
         """Test the API for getting the User's current list of Vehicles.
@@ -285,7 +314,7 @@ class TestUserAPI(BaseAPICase):
             self.assertEqual(len(our_vehicles_json["items"]), 1)
             self.assertEqual(our_vehicles_json["items"][0]["uid"], all_vehicles[0].uid)
             # Now, add another Vehicle to the User above.
-            users.create_vehicle(users.RequestCreateVehicle(text = "1997 Nissan Patrol"),
+            vehicles.create_vehicle(vehicles.RequestCreateVehicle(text = "1997 Nissan Patrol"),
                 user = aldos)
             db.session.flush()
             # Perform a request for our vehicles. Ensure its response is 200, then get its JSON.
@@ -294,6 +323,9 @@ class TestUserAPI(BaseAPICase):
             our_vehicles_json = our_vehicles_response.json
             # Ensure there's now two items in response.
             self.assertEqual(len(our_vehicles_json["items"]), 2)
+            # Ensure each entry has a UID that is not None.
+            for entry in our_vehicles_json["items"]:
+                self.assertIsNotNone(entry["uid"])
 
         
 class TestTrackAPI(BaseAPICase):

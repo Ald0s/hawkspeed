@@ -26,6 +26,7 @@ class TestTracks(BaseCase):
         track_from_json_2 = tracks.create_track_from_json(example2_json,
             is_verified = True, intersection_check = False)
         """TODO: some verifies here."""
+        print(track_from_json_2.track_path.length)
     
     def test_can_be_raced(self):
         """"""

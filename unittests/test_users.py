@@ -29,26 +29,3 @@ class TestUsers(BaseCase):
         with self.assertRaises(IntegrityError) as ie:
             db.session.add(new_player_dup)
             db.session.flush()
-
-    def test_user_vehicles(self):
-        """"""
-        # Create a new User, setup.
-        aldos = factory.create_user("alden@mail.com", "password",
-            username = "alden", vehicle = "1994 Toyota Supra")
-        db.session.flush()
-        # Ensure aldos has 1 vehicle.
-        self.assertEqual(aldos.num_vehicles, 1)
-        # Get that one Vehicle.
-        vehicle = aldos.vehicles.first()
-        # Now, set this User up as if they have a Player.
-        _, new_player = self.make_user_player(aldos)
-        db.session.refresh(aldos)
-        # Now, ensure aldos' current vehicle is None.
-        self.assertIsNone(aldos.current_vehicle)
-        # Set the vehicle as aldos' current vehicle.
-        aldos.set_current_vehicle(vehicle)
-        db.session.flush()
-        # Ensure aldos still has 1 vehicle.
-        self.assertEqual(aldos.num_vehicles, 1)
-        # Ensure aldos now has a non-None current vehicle.
-        self.assertIsNotNone(aldos.current_vehicle)
