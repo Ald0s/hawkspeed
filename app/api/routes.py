@@ -6,7 +6,7 @@ import logging
 from datetime import date, datetime
 
 from flask import request
-from flask_login import current_user, logout_user, login_required
+from flask_login import current_user, logout_user
 from marshmallow import ValidationError
 
 from .. import db, config, models, decorators, error, account, tracks, vehicles, viewmodel
@@ -23,7 +23,8 @@ def authenticate(**kwargs):
     try:
         # If the user is ALREADY logged in, the login success response will be returned without any other functions.
         if not current_user.is_authenticated:
-            # Current user requires logging in first.
+            # Current user requires logging in first, but before we do that, check with account module to ensure there's no stuck session.
+            account.clean_current_login()
             # Validate the authorization header.
             authorization = request.authorization
             if not authorization or not "username" in authorization or not "password" in authorization:
@@ -194,6 +195,26 @@ def get_user(user, **kwargs):
         raise e
     
 
+@api.route("/api/v1/vehicles/new", methods = [ "POST" ])
+@decorators.account_setup_required()
+def create_new_vehicle(**kwargs):
+    """Perform a POST request with a JSON body containing data compatible with a RequestCreateVehicle in order to create a new vehicle. On success,
+    this function will return a serialised vehicle view model."""
+    try:
+        # Load the contents of the request's JSON body to a request for creating a new vehicle.
+        request_create_vehicle_schema = vehicles.RequestCreateVehicleSchema()
+        request_create_vehicle = request_create_vehicle_schema.load(request.json)
+        # Create a new account view model.
+        account_view_model = viewmodel.AccountViewModel(current_user)
+        # Now, use the account view model to create the vehicle, getting back the vehicle view model.
+        vehicle_view_model = account_view_model.create_vehicle(request_create_vehicle)
+        # Now, commit; then serialise and return this view model.
+        db.session.commit()
+        return vehicle_view_model.serialise(), 200
+    except Exception as e:
+        raise e
+    
+
 @api.route("/api/v1/vehicles", methods = [ "GET" ], endpoint = "get_our_vehicles")
 @api.route("/api/v1/user/<user_uid>/vehicles", methods = [ "GET" ], endpoint = "get_vehicles_for")
 @decorators.account_setup_required()
@@ -221,16 +242,63 @@ def get_vehicles(user = None, **kwargs):
                 user = user_view_model.serialise())), 200
     except Exception as e:
         raise e
-    
+
+
+@api.route("/api/v1/user/<user_uid>/vehicles/<vehicle_uid>", methods = [ "GET" ])
+@decorators.account_setup_required()
+@decorators.get_user_vehicle()
+def get_vehicle(user, vehicle, **kwargs):
+    """Perform a request for a specific vehicle belonging to a specific user. On success, this route will return a serialised vehicle view model."""
+    try:
+        # Create a new vehicle view model with current User and the vehicle.
+        vehicle_view_model = viewmodel.VehicleViewModel(current_user, vehicle)
+        # Serialise and return this view model.
+        return vehicle_view_model.serialise(), 200
+    except Exception as e:
+        raise e
+
 
 @api.route("/api/v1/user/<user_uid>/races", methods = [ "GET" ])
 @decorators.account_setup_required()
 @decorators.get_user()
-def get_user_races(user, **kwargs):
+def page_user_races(user, **kwargs):
     """Perform a GET request along with pagination arguments to page the given User's race attempts. Optionally, filter arguments can also be supplied.
     The result of this route, on success, is a pagination response containing the page of items, current page and next page."""
     try:
-        raise NotImplementedError()
+        # Read the page to  query from, by default 1.
+        page = int(request.args.get("p", 1))
+        # Read the track UID filter. By default None.
+        track_uid = request.args.get("tuid", None)
+
+        # Create a new user view model for the targeted User.
+        user_view_model = viewmodel.UserViewModel(current_user, user)
+        # Now, get a pagination result from the view model for that user's race attempts.
+        race_attempts_sp = user_view_model.page_race_attempts(page,
+            track_uid = track_uid)
+        # Now, return this as a paged response, providing a base dict containing the serialised user view model too.
+        return race_attempts_sp.as_paged_response(base_dict = dict(
+            user = user_view_model.serialise())), 200
+    except Exception as e:
+        raise e
+
+
+@api.route("/api/v1/user/<user_uid>/tracks", methods = [ "GET" ])
+@decorators.account_setup_required()
+@decorators.get_user()
+def page_user_tracks(user, **kwargs):
+    """Perform a GET request along with pagination arguments to page the given User's tracks. The result of this route, on success, is a pagination
+    response containing the page of items, current page and next page."""
+    try:
+        # Read the page to  query from, by default 1.
+        page = int(request.args.get("p", 1))
+
+        # Create a new user view model for the targeted User.
+        user_view_model = viewmodel.UserViewModel(current_user, user)
+        # Now, get a pagination result from the view model for that user's tracks.
+        tracks_sp = user_view_model.page_tracks(page)
+        # Now, return this as a paged response, providing a base dict containing the serialised user view model too.
+        return tracks_sp.as_paged_response(base_dict = dict(
+            user = user_view_model.serialise())), 200
     except Exception as e:
         raise e
     
@@ -239,7 +307,7 @@ def get_user_races(user, **kwargs):
 @decorators.account_setup_required()
 @decorators.get_race()
 def get_race(race, **kwargs):
-    """Perform a GET request with a race's UID to get its current state."""
+    """Perform a GET request with a race's UID to get its current state; such as current speed, progress, error rate etc."""
     try:
         raise NotImplementedError()
     except Exception as e:
@@ -248,7 +316,7 @@ def get_race(race, **kwargs):
 
 @api.route("/api/v1/races/<race_uid>/leaderboard", methods = [ "GET" ])
 @decorators.account_setup_required()
-@decorators.get_race()
+@decorators.get_race(must_be_finished = True)
 def get_race_leaderboard(race, **kwargs):
     """Perform a GET request with a race's UID to get its detail here. The User must be authenticated and their profile must be set up for them to have access to this.
     This route will return a serialised leaderboard entry view model for the requested race attempt. Note: naming may be confusing but since HawkSpeed races are solo,
@@ -341,7 +409,8 @@ def manage_track(track, **kwargs):
     """Perform a GET request to view the track from a management perspective, a POST request to perform an update on the desired track, or a
     DELETE request to delete the track. These operations can only be performed by the track's owner and creator."""
     try:
-        raise NotImplementedError()
+        """TODO: implement this to manage tracks."""
+        raise NotImplementedError("manage_track is not implemented.")
     except Exception as e:
         raise e
 

@@ -63,17 +63,19 @@ class BaseConfig(private.PrivateBaseConfig, RaceConfigurationMixin, TrackConfigu
     #SERVER_NAME = f"127.0.0.1:{PORT}"
     SERVER_URL = "http://192.168.0.253:5000"
 
-    SERVER_VERSION_TEXT = "0.01.02"
-    SERVER_VERSION_CODE = 10
+    SERVER_VERSION_TEXT = "0.01.03"
+    SERVER_VERSION_CODE = 11
 
     # Streaming configuration.
     MAX_CONTENT_LENGTH = 16 * 1024 * 1024 # 16 MB
     STREAM_CHUNK_SZ = 10 * 1024 * 1024 # 10 MB
 
+    """TODO: this configuration value should be set from the outside ideally."""
+    EXTERNAL_USER_MEDIA_BASE_PATH = "instance/userdata"
+
     # Some import directories.
     ERRORS_PATH = "error"
     IMPORTS_PATH = "imports"
-    USERDATA_PATH = "userdata"
     INSTANCE_PATH = "instance"
     # Some directories.
     GPX_ROUTES_DIR = os.path.join(IMPORTS_PATH, "gpx-routes")
@@ -91,6 +93,7 @@ class BaseConfig(private.PrivateBaseConfig, RaceConfigurationMixin, TrackConfigu
     FORWARDED_PREFIX = 0
 
     PAGE_SIZE_LEADERBOARD = 20
+    PAGE_SIZE_TRACKS = 15
     PAGE_SIZE_COMMENTS = 15
     PAGE_SIZE_VEHICLES = 25
 
@@ -104,8 +107,8 @@ class BaseConfig(private.PrivateBaseConfig, RaceConfigurationMixin, TrackConfigu
             except OSError as o:
                 pass
         make_dir(self.IMPORTS_PATH)
-        make_dir(self.USERDATA_PATH)
         make_dir(self.ERRORS_PATH)
+        make_dir(self.EXTERNAL_USER_MEDIA_BASE_PATH)
 
 
 class TestConfig(private.PrivateTestConfig, BaseConfig):
@@ -121,7 +124,6 @@ class TestConfig(private.PrivateTestConfig, BaseConfig):
     #TEST_CELERY_TASKS = False # Should celery tasks be tested? This will be done eager as per CELERY_ALWAYS_EAGER but still...
 
     IMPORTS_PATH = os.path.join("imports", "testdata")
-    USERDATA_PATH = os.path.join("userdata", "test")
     # Some directories.
     GPX_ROUTES_DIR = os.path.join(IMPORTS_PATH, "gpx-routes")
     TESTDATA_GPX_ROUTES_DIR = os.path.join(IMPORTS_PATH, "gpx-routes", "test-routes")
@@ -152,7 +154,6 @@ class DevelopmentConfig(private.PrivateDevelopmentConfig, BaseConfig):
 
     # Set imports directory to the test data subdirectory within imports. This must contain our test tarballs.
     IMPORTS_PATH = os.path.join("imports", "testdata")
-    USERDATA_PATH = os.path.join("userdata", "test")
     # Some directories.
     GPX_ROUTES_DIR = os.path.join(IMPORTS_PATH, "gpx-routes")
     TESTDATA_GPX_ROUTES_DIR = os.path.join(IMPORTS_PATH, "gpx-routes", "test-routes")

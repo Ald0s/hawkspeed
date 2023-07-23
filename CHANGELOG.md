@@ -79,3 +79,13 @@
 * Removed account_setup_required decorator from most object related decorators, since it is possible for unauthenticated users to query this data. Please ensure endpoint is decorated with account_setup_required to enforce this,
 * Added a separate vehicles route for getting the current user's vehicles and a desired User's vehicles,
 * Added stub API function for querying a User's races.
+
+## Version 0.01.03
+* Added a manage function that will cancel ongoing races on every server startup; to prevent races getting 'stuck' in an ongoing state should server stop unexpectedly; test created,
+* Fixed missing data points from vehicle stock,
+* Added API function for querying a specific User's vehicle detail by the User's UID and Vehicle's UID,
+* Modified user vehicle to now require proper identification and setup with an existing stock Vehicle,
+* Added support for searching stock vehicles by a brief title like 1994 toyota supra,
+* Added Media entity for storing various types of media such as images and videos,
+* Implemented paging a User's race attempt history,
+* Added finishing_place query expression support to get_race, with must_be_finished flag.

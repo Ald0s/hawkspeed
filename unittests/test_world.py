@@ -6,13 +6,13 @@ import base64
 from sqlalchemy import func, asc
 from datetime import date, datetime, timedelta
 from flask import url_for
-from unittests.conftest import BaseCase
+from unittests.conftest import BaseWithDataCase
 
 from app import db, config, factory, models, login_manager, world, tracks
 from app.socket import handler as sockhandler
 
 
-class TestWorld(BaseCase):
+class TestWorld(BaseWithDataCase):
     def test_dont_trim_player_location_attached_race(self):
         # Create a new User.
         aldos = factory.create_user("alden@mail.com", "password",

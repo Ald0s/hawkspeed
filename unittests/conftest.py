@@ -12,19 +12,20 @@ from flask_login import FlaskLoginClient
 from flask_testing import TestCase
 from werkzeug.datastructures import FileStorage
 
-from app import create_app, db, models, config, factory, error, compat, world, races, tracks
+from app import create_app, db, models, config, factory, error, compat, world, races, tracks, vehicles
 
 
 class BaseCase(TestCase):
     @classmethod
     def tearDownClass(cls):
         """Delete all test userdata items when tests are complete within a class."""
-        userdata_directory = os.path.join(os.getcwd(), config.USERDATA_PATH)
+        """TODO: use config.EXTERNAL_USER_MEDIA_BASE_PATH instead to get to our current userdata path for clearing."""
+        '''userdata_directory = os.path.join(os.getcwd(), config.USERDATA_PATH)
         userdata_files = os.listdir(userdata_directory)
         for file in userdata_files:
             file_to_delete = os.path.join(userdata_directory, file)
             # Delete the file.
-            os.remove(file_to_delete)
+            os.remove(file_to_delete)'''
 
     def setUp(self):
         db.create_all()
@@ -190,6 +191,15 @@ class BaseCase(TestCase):
         return race
 
 
+class BaseWithDataCase(BaseCase):
+    """A base test case for tests that require all data to be imported such as vehicle information."""
+    def setUp(self):
+        # Must call super first to get a server configuration created.
+        super().setUp()
+        # Simply load vehicle data from the vehicles JSON.
+        vehicles.load_vehicle_data_from("vehicles.json")
+        
+
 class UserAppClient(FlaskLoginClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -210,7 +220,7 @@ class UserAppClient(FlaskLoginClient):
         self.override_user_agent = f"okhttp/4.9.1 (hawkspeed:app-android-{ver})"
 
 
-class BaseMockLoginCase(BaseCase):
+class BaseMockLoginCase(BaseWithDataCase):
     def create_app(self):
         test_app = super().create_app()
         test_app.test_client_class = UserAppClient
@@ -333,7 +343,7 @@ class BaseAPICase(BaseMockLoginCase):
         return None
 
 
-class BaseBrowserCase(BaseCase):
+class BaseBrowserCase(BaseWithDataCase):
     def create_app(self):
         test_app = super().create_app()
         test_app.test_client_class = FlaskLoginClient

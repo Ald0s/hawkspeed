@@ -7,12 +7,20 @@ import base64
 from datetime import date, datetime, timedelta
 from flask import url_for
 from sqlalchemy.exc import IntegrityError
-from unittests.conftest import BaseCase
+from unittests.conftest import BaseWithDataCase
 
 from app import db, config, factory, models, vehicles, error, world
 
 
-class TestVehicles(BaseCase):
+class TestVehicles(BaseWithDataCase):
+    def test_find_vehicle_stock(self):
+        """Test the various search methods for a vehicle stock."""
+        # Now, search for a '1994 Toyota Supra' by that exact same text.
+        vehicle_stock = vehicles.find_vehicle_stock(
+            text = "1994 Toyota Supra")
+        # Ensure this is not None.
+        self.assertIsNotNone(vehicle_stock)
+
     def test_vehicles_basics(self):
         """Test the basic functionality for importing vehicle data and then searching for a vehicle via the function intended for the API.
         Import all vehicle data from the vehicles test JSON.
@@ -21,9 +29,6 @@ class TestVehicles(BaseCase):
         Find car. Find all models within that type for Toyota. Expect 4.
         Find supra. Find all years within that model and type for Toyota. Expect 18.
         Find 1994. Find all options for supra in 1994. Expect 4."""
-        # Load all vehicle data.
-        vehicles.load_vehicle_data_from("vehicles.json")
-        db.session.flush()
         # Now, search for all vehicle makes by supplying no arguments.
         all_vehicle_makes = vehicles.search_vehicles().all()
         # Ensure result has two results.
@@ -56,9 +61,20 @@ class TestVehicles(BaseCase):
             make_uid = toyota.uid, type_id = toyota_car.type_id, model_uid = toyota_car_supra.uid, year = toyota_car_supra_1994.year).all()
         # Ensure result has 4 results.
         self.assertEqual(len(all_supra_options), 4)
+        # Get the first option.
+        first_supra = all_supra_options[0]
+        # Ensure title is 1994 Toyota Supra
+        self.assertEqual(first_supra.title, "1994 Toyota Supra")
         
     def test_user_vehicles(self):
-        """"""
+        """Load all vehicle data.
+        Create a new User, with a vehicle.
+        Ensure that User has one vehicle.
+        Get that vehicle.
+        Make a user player for that User.
+        Ensure the User does not have a vehicle in use.
+        Set the vehicle above to the one in use by the User.
+        Ensure the User has a vehicle in use."""
         # Create a new User, setup.
         aldos = factory.create_user("alden@mail.com", "password",
             username = "alden", vehicle = "1994 Toyota Supra")

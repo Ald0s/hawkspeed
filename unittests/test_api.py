@@ -207,8 +207,7 @@ class TestRegistrationAndSetup(BaseAPICase):
             setup_profile_d = dict(
                 username = "Alden",
                 bio = None,
-                vehicle_information = "1994 Toyota Supra"
-            )
+                vehicle = dict(vehicle_stock_uid = "1994 Toyota Supra"))
             setup_profile_request = client.post(url_for("api.setup_profile"),
                 data = json.dumps(setup_profile_d),
                 content_type = "application/json"
@@ -239,10 +238,13 @@ class TestRegistrationAndSetup(BaseAPICase):
         aldos = factory.create_user("alden@gmail.com", "password",
             verified = True)
         db.session.flush()
+        # Find a supra.
+        supra = vehicles.find_vehicle_stock(
+            text = "1994 Toyota Supra")
         # Log aldos in.
         with self.app.test_client(user = aldos) as client:
             setup_profile_response = client.post(url_for("api.setup_profile"),
-                data = json.dumps(dict(username = "aldos", bio = "This is a bio.", vehicle = dict(text = "1994 Toyota Supra"))),
+                data = json.dumps(dict(username = "aldos", bio = "This is a bio.", vehicle = dict(vehicle_stock_uid = supra.vehicle_uid))),
                 content_type = "application/json")
             # Should have succeeded.
             self.assertEqual(setup_profile_response.status_code, 200)
@@ -251,23 +253,120 @@ class TestRegistrationAndSetup(BaseAPICase):
             # Confirm the username and bio matches.
             self.assertEqual(account_d["username"], "aldos")
             self.assertEqual(aldos.bio, "This is a bio.")
+            self.assertEqual(aldos.num_vehicles, 1)
             # Finally, confirm that profile is setup.
             self.assertEqual(account_d["is_profile_setup"], True)
-            """TODO: vehicles here."""
-            self.assertEqual(True, False)
 
 
 class TestUserAPI(BaseAPICase):
     def test_get_user(self):
-        """"""
-        self.assertEqual(True, False)
+        """Test the API functionality for getting a user's details.
+        Create two new Users.
+        Authenticate as the first User.
+        Query details of the second User. Ensure request was successful.
+        Ensure UID in the response matches second User."""
+        # Create two Users.
+        aldos = factory.create_user("alden@mail.com", "password",
+            username = "alden", vehicle = "1994 Toyota Supra")
+        emily = factory.create_user("emily@mail.com", "password",
+            username = "emily", vehicle = "1999 Mazda MX-5")
+        db.session.flush()
+        # Now, authenticate as the first User.
+        with self.app.test_client(user = aldos) as client:
+            # Perform a request for second User's details.
+            get_user_response = client.get(url_for("api.get_user", user_uid = emily.uid))
+            self.assertEqual(get_user_response.status_code, 200)
+            # Ensure UID in response JSON matches.
+            self.assertEqual(get_user_response.json["uid"], emily.uid)
     
-    def test_get_user_races(self):
+    def test_page_user_races(self):
+        """Test the API functionality for paging a specific User's race attempts.
+        Create 3 different race attempts for the User, the first and last on one track, and the second on another.
+        Create a User. Authenticate as them.
+        Query the User's race attempts.
+        Ensure there's 3 results.
+        Ensure the first result was finished AFTER the last (sorted by started descending).
+        Perform another query, filtering results to just the first race track.
+        Ensure there's 2 results."""
+        # Create a User.
+        aldos = factory.create_user("alden@mail.com", "password",
+            username = "alden", vehicle = "1994 Toyota Supra")
+        db.session.flush()
+        # Import two example tracks.
+        track1 = self.create_track_from_gpx(aldos, "yarra_boulevard.gpx")
+        track2 = self.create_track_from_gpx(aldos, "example1.gpx")
+        # Create the three fake race attempts.
+        self.make_finished_track_user_race(track1, aldos, 1672882465000, 1672882609000)
+        self.make_finished_track_user_race(track2, aldos, 1673007209000, 1673007371000)
+        self.make_finished_track_user_race(track1, aldos, 1673003429000, 1673003603000)
+        db.session.flush()
+        # Now, authenticate as the first User.
+        with self.app.test_client(user = aldos) as client:
+            # Now, perform a request for the User's race attempts. Ensure it was successful.
+            races_response = client.get(url_for("api.page_user_races", user_uid = aldos.uid))
+            self.assertEqual(races_response.status_code, 200)
+            # Get the JSON.
+            races_json = races_response.json["items"]
+            # Ensure there's 3 items in response.
+            self.assertEqual(len(races_json), 3)
+            # Ensure the first finished is greater than the last.
+            self.assertGreater(races_json[0]["finished"], races_json[len(races_json)-1]["finished"])
+            # Now, perform another query, this time applying a filter for the track to only request track1.
+            races_response = client.get(url_for("api.page_user_races", user_uid = aldos.uid, tuid = track1.uid))
+            self.assertEqual(races_response.status_code, 200)
+            # Get the JSON.
+            races_json = races_response.json["items"]
+            # Ensure there's 2 items in response.
+            self.assertEqual(len(races_json), 2)
+
+    def test_page_user_tracks(self):
         """"""
         self.assertEqual(True, False)
-
+        
 
 class TestVehicleAPI(BaseAPICase):
+    def test_create_new_vehicle(self):
+        """Create a new User.
+        Authenticate the new User.
+        Perform a request to create a new vehicle.
+        Ensure the response is successful."""
+        # Create a User.
+        aldos = factory.create_user("alden@mail.com", "password",
+            username = "alden", vehicle = "1994 Toyota Supra")
+        db.session.flush()
+        # Now, search for a '1999 Toyota MR2' by that exact same text.
+        vehicle_stock = vehicles.find_vehicle_stock(
+            text = "1999 Toyota MR2")
+        # Now, authenticate as the first User.
+        with self.app.test_client(user = aldos) as client:
+            # Now, perform a request to create a new vehicle for the current User, with the UID for the vehicle stock.
+            create_vehicle_response = client.post(url_for("api.create_new_vehicle"),
+                data = json.dumps(dict(vehicle_stock_uid = vehicle_stock.vehicle_uid)),
+                content_type = "application/json")
+            # Ensure response status is successful.
+            self.assertEqual(create_vehicle_response.status_code, 200)
+
+    def test_get_vehicle(self):
+        """Test the API for getting a User's specific vehicle detail.
+        Create a User with a Vehicle.
+        Authenticate the User, then perform a request with that User's UID and the Vehicle's UID.
+        Ensure response is successful.
+        Ensure the result contains the vehicle, with the correct UID."""
+        # Create a User.
+        aldos = factory.create_user("alden@mail.com", "password",
+            username = "alden", vehicle = "1994 Toyota Supra")
+        db.session.flush()
+        # Get all vehicles from aldos.
+        all_vehicles = aldos.all_vehicles
+        # Now, authenticate as the first User.
+        with self.app.test_client(user = aldos) as client:
+            # Perform a request for details of aldos' vehicle. Ensure its response is 200, then get its JSON.
+            vehicle_detail_response = client.get(url_for("api.get_vehicle", user_uid = aldos.uid, vehicle_uid = all_vehicles[0].uid))
+            self.assertEqual(vehicle_detail_response.status_code, 200)
+            vehicle_detail_json = vehicle_detail_response.json
+            # Ensure the UID matches.
+            self.assertEqual(vehicle_detail_json["uid"], all_vehicles[0].uid)
+
     def test_get_vehicles(self):
         """Test the API for getting a User's current list of Vehicles.
         Create two new Users each with a vehicle.
@@ -314,7 +413,7 @@ class TestVehicleAPI(BaseAPICase):
             self.assertEqual(len(our_vehicles_json["items"]), 1)
             self.assertEqual(our_vehicles_json["items"][0]["uid"], all_vehicles[0].uid)
             # Now, add another Vehicle to the User above.
-            vehicles.create_vehicle(vehicles.RequestCreateVehicle(text = "1997 Nissan Patrol"),
+            vehicles.create_vehicle(vehicles.RequestCreateVehicle(text = "1999 Toyota MR2"),
                 user = aldos)
             db.session.flush()
             # Perform a request for our vehicles. Ensure its response is 200, then get its JSON.
@@ -326,6 +425,62 @@ class TestVehicleAPI(BaseAPICase):
             # Ensure each entry has a UID that is not None.
             for entry in our_vehicles_json["items"]:
                 self.assertIsNotNone(entry["uid"])
+    
+    def test_search_vehicles(self):
+        """Test the basic functionality for importing vehicle data and then searching for a vehicle via the API.
+        Import all vehicle data from the vehicles test JSON.
+        Perform a search for all vehicles with no arguments, to be returned all makes. Expect 2.
+        Find toyota. Perform a search for all types within Toyota. Expect 1.
+        Find car. Find all models within that type for Toyota. Expect 4.
+        Find supra. Find all years within that model and type for Toyota. Expect 18.
+        Find 1994. Find all options for supra in 1994. Expect 4."""
+        # Create a User.
+        aldos = factory.create_user("alden@mail.com", "password",
+            username = "alden", vehicle = "1994 Toyota Supra")
+        db.session.flush()
+        # Now, authenticate as the User.
+        with self.app.test_client(user = aldos) as client:
+            # Now, search for all vehicle makes by supplying no arguments.
+            all_makes_response = client.get(url_for("api.vehicles_stock_search"))
+            self.assertEqual(all_makes_response.status_code, 200)
+            all_makes_response_json = all_makes_response.json
+            # Ensure result has two results.
+            self.assertEqual(len(all_makes_response_json["items"]), 2)
+            # Filter all vehicle makes to just Toyota.
+            toyota = next(filter(lambda mk: mk["make_name"] == "Toyota", all_makes_response_json["items"]))
+            # Now, get all types within this make, by supplying the make UID.
+            toyota_types_response = client.get(url_for("api.vehicles_stock_search", mk = toyota["make_uid"]))
+            self.assertEqual(toyota_types_response.status_code, 200)
+            toyota_types_response_json = toyota_types_response.json
+            # Ensure result has one result.
+            self.assertEqual(len(toyota_types_response_json["items"]), 1)
+            # Filter all vehicle types to car.
+            toyota_car = next(filter(lambda t: t["type_id"] == "car", toyota_types_response_json["items"]))
+            # Now, search for all models of this type from this make.
+            toyota_car_models_response = client.get(url_for("api.vehicles_stock_search", mk = toyota["make_uid"], t = toyota_car["type_id"]))
+            self.assertEqual(toyota_car_models_response.status_code, 200)
+            toyota_car_models_response_json = toyota_car_models_response.json
+            # Ensure result has 4 results.
+            self.assertEqual(len(toyota_car_models_response_json["items"]), 4)
+            # Filter all vehicle models to Supra.
+            toyota_car_supra = next(filter(lambda m: m["model_name"] == "Supra", toyota_car_models_response_json["items"]))
+            # Now search for all available years for this model.
+            available_years_response = client.get(url_for("api.vehicles_stock_search", mk = toyota["make_uid"], t = toyota_car["type_id"], mdl = toyota_car_supra["model_uid"]))
+            self.assertEqual(available_years_response.status_code, 200)
+            available_years_response_json = available_years_response.json
+            # Ensure result has 18 results.
+            self.assertEqual(len(available_years_response_json["items"]), 18)
+            # Filter all vehicle years to 1994.
+            toyota_car_supra_1994 = next(filter(lambda y: y["year"] == 1994, available_years_response_json["items"]))
+            # Now, get all options for supra in 1994.
+            all_supra_options_response = client.get(url_for("api.vehicles_stock_search", mk = toyota["make_uid"], t = toyota_car["type_id"], mdl = toyota_car_supra["model_uid"], y = toyota_car_supra_1994["year"]))
+            self.assertEqual(all_supra_options_response.status_code, 200)
+            all_supra_options_response_json = all_supra_options_response.json
+            # Ensure result has 4 results.
+            self.assertEqual(len(all_supra_options_response_json["items"]), 4)
+            # Ensure all trans_types are not none.
+            for sup in all_supra_options_response_json["items"]:
+                self.assertIsNotNone(sup["trans_type"])
 
         
 class TestTrackAPI(BaseAPICase):
@@ -466,7 +621,7 @@ class TestTrackAPI(BaseAPICase):
             self.assertEqual(track_json["ratings"]["num_negative_votes"], 0)
     
     def test_track_comments(self):
-        """"""
+        """Test the API functionality for creating, managing and paging track comments."""
         self.assertEqual(True, False)
 
     def test_get_race(self):

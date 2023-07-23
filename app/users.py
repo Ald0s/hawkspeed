@@ -30,7 +30,6 @@ def find_existing_user(**kwargs) -> models.User:
         user_uid = kwargs.get("user_uid", None)
         if user_uid == None:
             return None
-
         user_q = db.session.query(models.User)
         if user_uid:
             user_q = user_q\

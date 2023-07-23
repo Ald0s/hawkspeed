@@ -9,7 +9,7 @@ from flask import request, g, redirect, url_for, render_template
 from flask_login import current_user, login_required as flask_login_required
 from werkzeug.exceptions import Unauthorized
 
-from . import db, config, models, error, races, tracks, users
+from . import db, config, models, error, races, tracks, users, vehicles
 
 LOG = logging.getLogger("hawkspeed.decorators")
 LOG.setLevel( logging.DEBUG )
@@ -170,10 +170,12 @@ def get_race(**kwargs):
     -----------------
     :race_uid_key: The key under which the UID for the Race to be grabbed. Default is 'race_uid'.
     :race_output_key: The key under which the located Race should be passed. Default is 'race'.
-    :required: A boolean; True if the route should fail if the Race not found. Default is True."""
+    :required: A boolean; True if the route should fail if the Race not found. Default is True.
+    :must_be_finished: A boolean; True if the race should be in the finished state. Default is False."""
     race_uid_key = kwargs.get("race_uid_key", "race_uid")
     race_output_key = kwargs.get("race_output_key", "race")
     required = kwargs.get("required", True)
+    must_be_finished = kwargs.get("must_be_finished", False)
 
     def decorator(f):
         @wraps(f)
@@ -182,13 +184,52 @@ def get_race(**kwargs):
             race_uid = kwargs.get(race_uid_key, None)
             # Attempt to find the Race.
             race = races.get_race(
-                race_uid = race_uid)
+                race_uid = race_uid, must_be_finished = must_be_finished)
             # If no Race found, raise an error.
             if not race and required:
                 """TODO: handle this properly."""
                 raise NotImplementedError("Could not find race by UID in decorator. This is not handled either.")
             # Finally, pass the Race back via output key.
             kwargs[race_output_key] = race
+            # And call original function.
+            return f(*args, **kwargs)
+        return decorated_view
+    return decorator
+
+
+def get_user_vehicle(**kwargs):
+    """Locate a Vehicle with the given User UID and Vehicle UID passed in keyword arguments.
+
+    Keyword arguments
+    -----------------
+    :user_uid_key: The key under which the UID for the User to be grabbed. Default is 'user_uid'.
+    :user_output_key: The key under which the located User should be passed. Default is 'user'.
+    :vehicle_uid_key: The key under which the UID for the Vehicle to be grabbed. Default is 'vehicle_uid'.
+    :vehicle_output_key: The key under which the located Vehicle should be passed. Default is 'vehicle'.
+    :required: A boolean; True if the route should fail if the User or Vehicle is not found. Default is True."""
+    user_uid_key = kwargs.get("user_uid_key", "user_uid")
+    user_output_key = kwargs.get("user_output_key", "user")
+    vehicle_uid_key = kwargs.get("vehicle_uid_key", "vehicle_uid")
+    vehicle_output_key = kwargs.get("vehicle_output_key", "vehicle")
+    required = kwargs.get("required", True)
+
+    def decorator(f):
+        @wraps(f)
+        @get_user(
+            user_uid_key = user_uid_key, user_output_key = user_output_key, required = required)
+        def decorated_view(*args, **kwargs):
+            # Get the User from keyword arguments.
+            user = kwargs.get(user_output_key, None)
+            # Get the incoming Vehicle UID.
+            vehicle_uid = kwargs.get(vehicle_uid_key, None)
+            # Attempt to find the Vehicle.
+            vehicle = vehicles.find_vehicle_for_user(user, vehicle_uid)
+            # If no Vehicle found, raise an error.
+            if not vehicle and required:
+                """TODO: handle this properly."""
+                raise NotImplementedError("Could not find vehicle by UID in decorator. This is not handled either.")
+            # Finally, pass the Vehicle back via output key.
+            kwargs[vehicle_output_key] = vehicle
             # And call original function.
             return f(*args, **kwargs)
         return decorated_view

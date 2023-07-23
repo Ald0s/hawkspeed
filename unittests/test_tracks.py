@@ -5,12 +5,12 @@ import base64
 
 from datetime import date, datetime, timedelta
 from flask import url_for
-from unittests.conftest import BaseCase
+from unittests.conftest import BaseWithDataCase
 
-from app import db, config, factory, models, login_manager, tracks, error
+from app import db, config, factory, models, login_manager, tracks, races, error
 
 
-class TestTracks(BaseCase):
+class TestTracks(BaseWithDataCase):
     def test_loading_tracks(self):
         # Create a new User.
         aldos = factory.create_user("alden@mail.com", "password",
@@ -101,6 +101,20 @@ class TestTracks(BaseCase):
         # Third is place #3 and at the end.
         self.assertEqual(leaderboard[2].uid, race_third.uid)
         self.assertEqual(leaderboard[2].finishing_place, 3)
+        # Now, use the races module to locate all three leaderboard entries we've found above.
+        new_leaderboard = [races.get_race(race_uid = lb.uid, must_be_finished = True) for lb in leaderboard]
+        # Ensure there's 3.
+        self.assertEqual(len(new_leaderboard), 3)
+        # Now, ensure the same UID -> finishing place test as above matches.
+        self.assertEqual(new_leaderboard[0].uid, race_first.uid)
+        self.assertEqual(new_leaderboard[0].finishing_place, 1)
+        # Second is place #2 and in the middle.
+        self.assertEqual(new_leaderboard[1].uid, race_second.uid)
+        self.assertEqual(new_leaderboard[1].finishing_place, 2)
+        # Third is place #3 and at the end.
+        self.assertEqual(new_leaderboard[2].uid, race_third.uid)
+        self.assertEqual(new_leaderboard[2].finishing_place, 3)
+
 
     def test_ratings(self):
         """Import a test GPX route.

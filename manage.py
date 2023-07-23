@@ -10,7 +10,7 @@ import flask_socketio
 from flask import current_app
 from sqlalchemy_utils import create_database, database_exists
 
-from app import create_app, db, config, models, decorators, error, factory, tracks, vehicles
+from app import create_app, db, config, models, decorators, error, factory, tracks, vehicles, races
 
 LOG = logging.getLogger("hawkspeed.manage")
 LOG.setLevel( logging.DEBUG )
@@ -43,6 +43,15 @@ def import_vehicle_data(server_configuration, **kwargs):
     # Simply load vehicle data from the vehicles JSON.
     vehicles.load_vehicle_data_from("vehicles.json",
         server_configuration = server_configuration)
+    # Commit.
+    db.session.commit()
+
+
+@application.cli.command("repair-stuck-races", help = "This should be called as part of every startup sequence. This will properly cancel all races from previous run.")
+@decorators.get_server_configuration()
+def repair_stuck_races(server_configuration, **kwargs):
+    """It's critical to call this function on every single launch. This will set all races currently ongoing to the 'cancelled' state."""
+    races.cancel_ongoing_races()
     # Commit.
     db.session.commit()
 

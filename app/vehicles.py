@@ -16,6 +16,24 @@ LOG = logging.getLogger("hawkspeed.vehicles")
 LOG.setLevel( logging.DEBUG )
 
 
+class RequestCreateVehicle():
+    """A container for a loaded request to create a new Vehicle."""
+    def __init__(self, **kwargs):
+        self.vehicle_stock_uid = kwargs.get("vehicle_stock_uid", None)
+        self.text = kwargs.get("text", None)
+
+
+class RequestCreateVehicleSchema(Schema):
+    """A schema for loading a request to create a new Vehicle."""
+    class Meta:
+        unknown = EXCLUDE
+    vehicle_stock_uid       = fields.Str(required = True, allow_none = False)
+
+    @post_load
+    def request_create_vehicle_post_load(self, data, **kwargs) -> RequestCreateVehicle:
+        return RequestCreateVehicle(**data)
+    
+
 def find_vehicle_for_user(user, vehicle_uid, **kwargs) -> models.UserVehicle:
     """Locate and return a Vehicle belonging to the given User, identified by the given Vehicle UID.
     
@@ -28,6 +46,8 @@ def find_vehicle_for_user(user, vehicle_uid, **kwargs) -> models.UserVehicle:
     -------
     The located vehicle."""
     try:
+        if not user or not vehicle_uid:
+            return None
         # Setup a query for user vehicle, filter by User's ID and by Vehicle UID.
         user_vehicle_q = db.session.query(models.UserVehicle)\
             .filter(models.UserVehicle.uid == vehicle_uid)\
@@ -56,10 +76,26 @@ def create_vehicle(request_create_vehicle, **kwargs) -> models.UserVehicle:
     try:
         user = kwargs.get("user", None)
         
-        # Create a new Vehicle model.
+        # If the request has attribute 'text', ensure we're in test or development environments. Fail otherwise.
+        if request_create_vehicle.text:
+            # Fail if not in test or development.
+            if config.APP_ENV != "Test" and config.APP_ENV != "Development":
+                raise Exception("RequestCreateVehicle's attribute, 'text', can't be used outside of debug modes.")
+            # Otherwise, locate the desired vehicle with text.
+            vehicle_stock = find_vehicle_stock(
+                text = request_create_vehicle.text)
+        else:
+            # Get the desired vehicle stock by its UID. Fail if none found.
+            vehicle_stock = find_vehicle_stock(
+                vehicle_stock_uid = request_create_vehicle.vehicle_stock_uid)
+        # Ensure we have a vehicle stock.
+        if not vehicle_stock:
+            """TODO: handle properly"""
+            raise NotImplementedError(f"Failed to create a new user vehicle. No vehicle stock could be found!")
+        # Create a new User Vehicle model.
         vehicle = models.UserVehicle()
-        # Set its text.
-        vehicle.set_text(request_create_vehicle.text)
+        # Set its vehicle stock.
+        vehicle.set_vehicle_stock(vehicle_stock)
         # If User has been given, add the vehicle to that User.
         if user:
             user.add_vehicle(vehicle)
@@ -91,7 +127,7 @@ class VehicleStockSchema(Schema):
         unknown = EXCLUDE
     vehicle_uid             = fields.Str(allow_none = False, required = True)
 
-    version                 = fields.Str(required = False, load_default = None)
+    version                 = fields.Str(required = False, load_default = None, load_only = True)
     badge                   = fields.Str(required = False, load_default = None)
 
     motor_type              = fields.Str(allow_none = False, required = True)
@@ -131,6 +167,8 @@ class YearModelSchema(Schema):
     make_uid                = fields.Str(allow_none = False, required = True)
     model_uid               = fields.Str(allow_none = False, required = True)
     year                    = fields.Int(allow_none = False, required = True)
+
+    # Only when we load we'll also load all vehicles belonging to this year model.
     vehicles                = fields.List(fields.Nested(VehicleStockSchema, many = False), load_only = True)
 
     @post_load
@@ -154,8 +192,10 @@ class ModelSchema(Schema):
         unknown = EXCLUDE
     uid                     = fields.Str(allow_none = False, required = True, data_key = "model_uid")
     make_uid                = fields.Str(allow_none = False, required = True)
-    type_id                 = fields.Str(allow_none = False, required = True)
     name                    = fields.Str(allow_none = False, required = True, data_key = "model_name")
+
+    # Only when we load we'll also load all year models belonging to this model. We'll also bring the type ID with.
+    type_id                 = fields.Str(allow_none = False, required = True, load_only = True)
     year_models             = fields.Dict(keys = fields.Int(), values = fields.Nested(YearModelSchema, many = False), load_only = True)
 
     # Only when we dump model, we'll also include the model's type.
@@ -180,28 +220,13 @@ class MakeSchema(Schema):
         unknown = EXCLUDE
     uid                     = fields.Str(allow_none = False, required = True, data_key = "make_uid")
     name                    = fields.Str(allow_none = False, required = True, data_key = "make_name")
+
+    # Only when we load we'll also load all models belonging to this make.
     models                  = fields.Dict(keys = fields.Str(), values = fields.Nested(ModelSchema, many = False), load_only = True)
 
     @post_load
     def make_post_load(self, data, **kwargs) -> LoadedMake:
         return LoadedMake(**data)
-    
-
-class RequestCreateVehicle():
-    """A container for a loaded request to create a new Vehicle."""
-    def __init__(self, **kwargs):
-        self.text = kwargs.get("text")
-
-
-class RequestCreateVehicleSchema(Schema):
-    """A schema for loading a request to create a new Vehicle."""
-    class Meta:
-        unknown = EXCLUDE
-    text                    = fields.Str(required = True, allow_none = False)
-
-    @post_load
-    def request_create_vehicle_post_load(self, data, **kwargs) -> RequestCreateVehicle:
-        return RequestCreateVehicle(**data)
 
 
 class LoadedType():
@@ -355,12 +380,12 @@ def update_vehicle_data(vehicle_data, **kwargs) -> UpdateVehicleDataResult:
                         vehicle_stock.set_badge(read_vehicle.badge)
                         vehicle_stock.set_motor_type(read_vehicle.motor_type)
                         vehicle_stock.set_displacement(read_vehicle.displacement)
-                        vehicle_stock.set_induction_type(read_vehicle.version)
-                        vehicle_stock.set_fuel_type(read_vehicle.version)
-                        vehicle_stock.set_power(read_vehicle.version)
-                        vehicle_stock.set_electric_motor_type(read_vehicle.version)
-                        vehicle_stock.set_transmission_type(read_vehicle.version)
-                        vehicle_stock.set_num_gears(read_vehicle.version)
+                        vehicle_stock.set_induction_type(read_vehicle.induction)
+                        vehicle_stock.set_fuel_type(read_vehicle.fuel_type)
+                        vehicle_stock.set_power(read_vehicle.power)
+                        vehicle_stock.set_electric_motor_type(read_vehicle.elec_type)
+                        vehicle_stock.set_transmission_type(read_vehicle.trans_type)
+                        vehicle_stock.set_num_gears(read_vehicle.num_gears)
                         db.session.merge(vehicle_stock)
         # Now, after updating, update the server configuration instance.
         server_configuration.set_vehicle_data_version(master.version, master.version_code)
@@ -398,6 +423,49 @@ def load_vehicle_data_from(filename, **kwargs) -> UpdateVehicleDataResult:
         return update_vehicle_data(loaded_vehicle_data)
     except Exception as e:
         raise e
+
+
+def _find_vehicle_stock(**kwargs) -> models.VehicleStock:
+    """A function that provides a number of options for locating a single vehicle stock. If provided options initially return multiple results, only the first will
+    be used and returned.
+    
+    Keyword arguments
+    -----------------
+    :vehicle_stock_uid: The UID for a target vehicle stock to locate.
+    :text: A textual representation of a vehicle in the format 'YEAR MAKE MODEL'. For example; '1994 Toyota Supra'.
+    
+    Returns
+    -------
+    A VehicleStock, if found. Or the first result in the list if multiple found."""
+    try:
+        vehicle_stock_uid = kwargs.get("vehicle_stock_uid", None)
+        text = kwargs.get("text", None)
+
+        if not vehicle_stock_uid and not text:
+            return None
+        # Prepare a query for the vehicle stock entity.
+        vehicle_stock_q = db.session.query(models.VehicleStock)
+        # Now, abstract on options.
+        if vehicle_stock_uid:
+            # If by UID, simply apply a filter.
+            vehicle_stock_q = vehicle_stock_q\
+                .filter(models.VehicleStock.vehicle_uid == vehicle_stock_uid)
+        elif text:
+            # Searching by text is a join dependant subquery, so join all the appropriate tables while querying the title.
+            vehicle_stock_q = vehicle_stock_q\
+                .join(models.VehicleStock.year_model)\
+                .join(models.VehicleYearModel.make)\
+                .join(models.VehicleYearModel.model)\
+                .filter(models.VehicleStock.title.ilike(text))
+        # Return the first result, always.
+        return vehicle_stock_q.first()
+    except Exception as e:
+        raise e
+    
+
+def find_vehicle_stock(**kwargs):
+    """Public equivalent for finding a vehicle stock."""
+    return _find_vehicle_stock(**kwargs)
 
 
 def _search_vehicles(**kwargs):
@@ -452,13 +520,14 @@ def _search_vehicles(**kwargs):
                 .filter(models.VehicleModel.type_id == type_id)
             SerialiseCls = ModelSchema
         elif not year:
-            # We have been given a make UID, type ID and a model UID. Return a query for years for that make, type ID and model.
+            # We have been given a make UID, type ID and a model UID. Return a query for years for that make, type ID and model; ordered in descending fashion.
             LOG.debug(f"Querying vehicle years within make {make_uid}, type ID {type_id} and model {model_uid}!")
             """TODO: join vehicle model here"""
             result_query = db.session.query(models.VehicleYear)\
                 .join(models.VehicleYearModel, models.VehicleYearModel.year_ == models.VehicleYear.year_)\
                 .filter(models.VehicleYearModel.make_uid == make_uid)\
-                .filter(models.VehicleYearModel.model_uid == model_uid)
+                .filter(models.VehicleYearModel.model_uid == model_uid)\
+                .order_by(desc(models.VehicleYear.year_))
             SerialiseCls = YearSchema
         else:
             # We have been given ALL arguments. Return a query for vehicle stocks for that type ID, make, model and year.

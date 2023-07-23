@@ -6,7 +6,7 @@ import urllib.parse
 import base64
 
 from datetime import date, datetime, timedelta
-from unittests.conftest import BaseCase
+from unittests.conftest import BaseWithDataCase
 
 from app import db, config, factory, error
 from app.tasks import roadsapi
@@ -31,7 +31,7 @@ def _fake_snap_to_roads_api_call(full_url):
         return 200, snap_to_roads_response_d
 
 
-class TestRoadsAPI(BaseCase):    
+class TestRoadsAPI(BaseWithDataCase):    
     def _get_test_track(self, user):
         # Import a test track.
         track = self.create_track_from_gpx(user, "yarra_boulevard.gpx",

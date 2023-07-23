@@ -84,7 +84,7 @@ def create_user(email_address, password, **kwargs) -> models.User:
     :enabled: True or False whether user should be enabled. Default is True.
     :verified: True or False whether user has verified their information/account. Default is True.
     :username: Provide to set the username & set profile as setup.
-    :vehicle: Provide to create the first Vehicle for this User.
+    :vehicle: Provide to create the first Vehicle for this User. This will be in textual form like '1994 Toyota Supra'
 
     Raises
     ------

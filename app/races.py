@@ -11,10 +11,11 @@ import shapely
 from geoalchemy2 import shape
 
 from datetime import datetime, date
-from sqlalchemy import func
+from sqlalchemy import func, update, desc, asc
+from sqlalchemy.orm import with_expression
 from marshmallow import fields, Schema, post_load, EXCLUDE
 
-from . import db, config, models, tracks, users, world, error
+from . import db, config, models, tracks, vehicles, world, error
 
 LOG = logging.getLogger("hawkspeed.races")
 LOG.setLevel( logging.DEBUG )
@@ -121,6 +122,41 @@ class TrackUserRaceSchema(Schema):
     percent_complete        = fields.Int(allow_none = True)
 
 
+def races_query_for(user, **kwargs):
+    """Assemble a query for the track user race entity, belonging exclusively to the given User. Optionally provide further filtration options via keyword
+    arguments. Results will be ordered in descending fashion by the started attribute, that is, latest attempts first.
+    
+    Arguments
+    ---------
+    :user: The User to query attempts for.
+    
+    Keyword arguments
+    -----------------
+    :track_uid: Optional track UID to filter attempts on.
+    
+    Returns
+    -------
+    The query for attempts."""
+    try:
+        track_uid = kwargs.get("track_uid", None)
+
+        # Build a query for track user race for that User where the track is finished.
+        race_attempts_q = db.session.query(models.TrackUserRace)\
+            .filter(models.TrackUserRace.is_finished == True)\
+            .filter(models.TrackUserRace.user_id == user.id)
+        # If track UID is given, apply that too.
+        if track_uid:
+            race_attempts_q = race_attempts_q\
+                .join(models.Track, models.Track.id == models.TrackUserRace.track_id)\
+                .filter(models.Track.uid == track_uid)
+        # Apply order by on the started attribute
+        race_attempts_q = race_attempts_q\
+            .order_by(desc(models.TrackUserRace.started))
+        return race_attempts_q
+    except Exception as e:
+        raise e
+    
+
 def get_ongoing_race(user, **kwargs) -> models.TrackUserRace:
     """Get the ongoing race for the given User and return it. If there is no ongoing race at the time, None will be returned.
     
@@ -149,16 +185,57 @@ def get_race(**kwargs) -> models.TrackUserRace:
     Keyword arguments
     -----------------
     :race_uid: The Race's UID.
+    :must_be_finished: True if the race should be finished. None will be returned if it is now. True will also attach the finishing place. Default is False.
     
     Returns
     -------
     An instance of TrackUserRace."""
     try:
+        must_be_finished = kwargs.get("must_be_finished", False)
         race_uid = kwargs.get("race_uid", None)
         if race_uid == None:
             return None
         
+        # Construct a basic query for race.
+        race_q = db.session.query(models.TrackUserRace)
+        # If race must be finished, filter on that.
+        if must_be_finished:
+            race_q = race_q\
+                .filter(models.TrackUserRace.is_finished == True)
+        # Now, if race UID is given, attach it as a filter.
+        if race_uid:
+            race_q = race_q\
+                .filter(models.TrackUserRace.uid == race_uid)
+        # If must be finished, also attach finishing place.
+        if must_be_finished:
+            race_q = race_q\
+                .options(
+                    with_expression(models.TrackUserRace.finishing_place,
+                        func.row_number()
+                            .over(order_by = asc(models.TrackUserRace.stopwatch))))
+        # Return the first result.
+        return race_q.first()
+    except Exception as e:
+        raise e
 
+
+def cancel_ongoing_races(reason = "server-problem", **kwargs):
+    """This function will update all currently ongoing races to be in a cancelled state, with the given reason. Primarily, this should really only
+    be used to cancel all ongoing races at the initialisation of the server. This function will not flush or commit. It returns nothing.
+    
+    Arguments
+    ---------
+    :reason: The reason to cancel all ongoing races for. Default is 'server-problem'"""
+    try:
+        # Run an update statement on all track user race instances, setting is cancelled to True.
+        cancel_ongoing_races_stmt = (
+            update(models.TrackUserRace)
+                .where(models.TrackUserRace.is_ongoing == True)
+                .values(cancelled = True)
+        )
+        # Execute this statement.
+        db.session.execute(cancel_ongoing_races_stmt)
+        db.session.flush()
     except Exception as e:
         raise e
     
@@ -219,7 +296,7 @@ def start_race_for(user, request_start_race, player_update_result, **kwargs) -> 
             vehicle = user.vehicles.first()
         else:
             # Otherwise, find it.
-            vehicle = users.find_vehicle_for_user(user, request_start_race.vehicle_uid)
+            vehicle = vehicles.find_vehicle_for_user(user, request_start_race.vehicle_uid)
             if not vehicle:
                 raise RaceStartError(RaceStartError.REASON_NO_VEHICLE)
         # We will set this Vehicle as the current vehicle.

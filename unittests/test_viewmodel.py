@@ -5,12 +5,12 @@ import base64
 
 from datetime import date, datetime, timedelta
 from flask import url_for
-from unittests.conftest import BaseCase
+from unittests.conftest import BaseWithDataCase
 
 from app import db, config, factory, models, login_manager, tracks, error, viewmodel
 
 
-class TestTrackViewModel(BaseCase):
+class TestTrackViewModel(BaseWithDataCase):
     def test_track_view_model_basics(self):
         """Import an example track; yarraboulevard."""
         # Create a new User.
@@ -56,4 +56,15 @@ class TestTrackViewModel(BaseCase):
         entry = top_leaderboard_vml.items[0]
         # Ensure the vehicle is 1994 Toyota Supra.
         self.assertEqual(entry.vehicle.title, "1994 Toyota Supra")
+        # First should have finishing place 1, second 2 etc.
+        self.assertEqual(top_leaderboard_vml.items[0].finishing_place, 1)
+        self.assertEqual(top_leaderboard_vml.items[1].finishing_place, 2)
+        self.assertEqual(top_leaderboard_vml.items[2].finishing_place, 3)
+        # Serialise the top leaderboard.
+        leaderboard_d = top_leaderboard_vml.as_dict()
+        leaderboard_l = leaderboard_d["items"]
+        # Ensure the first item's finishing place is 1, second is 2, third is 3 etc.
+        self.assertEqual(leaderboard_l[0]["finishing_place"], 1)
+        self.assertEqual(leaderboard_l[1]["finishing_place"], 2)
+        self.assertEqual(leaderboard_l[2]["finishing_place"], 3)
 

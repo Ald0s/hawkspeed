@@ -8,12 +8,12 @@ from shapely import geometry
 from sqlalchemy import func, asc
 from datetime import date, datetime, timedelta
 from flask import url_for
-from unittests.conftest import BaseCase, PlayerRaceGPXSimulator
+from unittests.conftest import BaseWithDataCase, PlayerRaceGPXSimulator
 
 from app import db, config, factory, models, login_manager, world, tracks, races, draw, error
 
 
-class TestRaces(BaseCase):
+class TestRaces(BaseWithDataCase):
     def test_stopwatch(self):
         """Test both instance level and expression level for property stopwatch."""
         # Create a new User.
@@ -190,3 +190,33 @@ class TestRaces(BaseCase):
         db.session.flush()
         # Ensure the race is now finished.
         self.assertEqual(race.is_finished, True)
+    
+    def test_cancel_ongoing_races(self):
+        """Test the cancel_ongoing_races function to ensure we can set multiple ongoing races to cancelled."""
+        # Create two test users now.
+        user1 = self.get_random_user()
+        user2 = self.get_random_user()
+        db.session.flush()
+        # Create a track.
+        track = self.create_track_from_gpx(user1, "yarra_boulevard.gpx")
+        db.session.flush()
+        # Now create a track instance for both user1 and user2 on this track.
+        user1_attempt = self.make_track_user_race(track, user1, time.time() * 1000)
+        user2_attempt = self.make_track_user_race(track, user2, time.time() * 1000)
+        db.session.flush()
+        # Ensure both races are ongoing.
+        self.assertEqual(user1_attempt.is_ongoing, True)
+        self.assertEqual(user2_attempt.is_ongoing, True)
+        # Ensure there's two ongoing races.
+        self.assertEqual(db.session.query(models.TrackUserRace.uid).filter(models.TrackUserRace.is_ongoing == True).count(), 2)
+        # Now, access the races module and cancel all ongoing races.
+        races.cancel_ongoing_races()
+        db.session.flush()
+        # Ensure both are no longer ongoing, and there are 0 ongoing races.
+        self.assertEqual(user1_attempt.is_ongoing, False)
+        self.assertEqual(user2_attempt.is_ongoing, False)
+        self.assertEqual(db.session.query(models.TrackUserRace.uid).filter(models.TrackUserRace.is_ongoing == True).count(), 0)
+        # However, ensure there are two cancelled and both attempts are cancelled.
+        self.assertEqual(user1_attempt.is_cancelled, True)
+        self.assertEqual(user2_attempt.is_cancelled, True)
+        self.assertEqual(db.session.query(models.TrackUserRace.uid).filter(models.TrackUserRace.is_cancelled == True).count(), 2)

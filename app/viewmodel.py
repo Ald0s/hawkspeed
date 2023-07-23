@@ -15,7 +15,7 @@ from sqlalchemy import asc, desc
 from flask_sqlalchemy import Pagination
 from werkzeug.local import LocalProxy
 
-from . import db, config, models, error, tracks, races
+from . import db, config, models, error, tracks, races, vehicles
 
 LOG = logging.getLogger("hawkspeed.viewmodel")
 LOG.setLevel( logging.DEBUG )
@@ -310,10 +310,14 @@ class VehicleViewModel(BaseViewModel):
         ### First some info about the Vehicle. ###
         # The Vehicle's UID. Can't be None.
         uid                 = fields.Str(required = True, allow_none = False)
-        # The Vehicle's text. Can't be None.
-        text                = fields.Str(required = True, allow_none = False)
-        # Does this vehicle belong to the actor? Can't be None.
-        belongs_to_you      = fields.Bool(required = True, allow_none = False)
+        # The Vehicle's title. Can't be None.
+        title               = fields.Str(required = True, allow_none = False)
+        
+        ### Some entities. ###
+        # The stock Vehicle this Vehicle derives from. Can't be None.
+        stock               = fields.Nested(vehicles.VehicleStockSchema(), many = False, allow_none = False)
+        # The User that owns the Vehicle. Can't be None.
+        user                = SerialiseViewModelField(allow_none = False)
 
     @property
     def uid(self):
@@ -324,17 +328,17 @@ class VehicleViewModel(BaseViewModel):
     def title(self):
         """Returns the Vehicle's title."""
         return self.patient.title
+
+    @property
+    def stock(self):
+        """Return the stock vehicle for this User vehicle."""
+        return self.patient.stock
     
     @property
-    def text(self):
-        """Returns the Vehicle's text."""
-        return self.patient.text
-    
-    @property
-    def belongs_to_you(self):
-        """Returns True if the vehicle belongs to the actor."""
-        return self.actor == self.patient.user
-    
+    def user(self) -> UserViewModel:
+        """Return the User that owns this Vehicle."""
+        return UserViewModel(self.actor, self.patient.user)
+
     def serialise(self, **kwargs):
         """Serialise and return this vehicle view model."""
         schema = VehicleViewModel.VehicleViewSchema(**kwargs)
@@ -368,6 +372,10 @@ class LeaderboardEntryViewModel(BaseViewModel):
         vehicle             = SerialiseViewModelField(required = True, allow_none = False)
         # The UID for the Track that was raced on. Can't be None.
         track_uid           = fields.Str(required = True, allow_none = False)
+        # The Track's name. Can't be None.
+        track_name          = fields.Str(required = True, allow_none = False)
+        # The Track's type. Can't be None.
+        track_type          = fields.Int(required = True, allow_none = False)
 
     @property
     def race_uid(self):
@@ -423,7 +431,17 @@ class LeaderboardEntryViewModel(BaseViewModel):
     def track_uid(self):
         """The track's UID."""
         return self.patient.track_uid
+    
+    @property
+    def track_name(self):
+        """The track's name."""
+        return self.patient.track_name
 
+    @property
+    def track_type(self):
+        """The track's type."""
+        return self.patient.track_type
+    
     def __init__(self, _actor, _track_user_race, **kwargs):
         """A normal view model constructor with an actor and a patient, but the patient must be a TrackUserRace, or another view model that also utilises a TrackUserRace
         as the patient entity. That race outcome must not be ongoing, and also must be successfully completed. If these requirements are not qualified, the following errors
@@ -952,6 +970,66 @@ class UserViewModel(BaseViewModel):
 
     def get_nested_serialisation_kwargs(self):
         return dict( exclude = () )
+    
+    def page_race_attempts(self, page = 1, **kwargs) -> ViewModelPagination:
+        """Page this User's race attempts.
+
+        Arguments
+        ---------
+        :page: The page of attempts to get from the track for this User.
+
+        Keyword arguments
+        -----------------
+        :num_in_page: The number of items per page. Default is PAGE_SIZE_LEADERBOARD.
+        :track_uid: An optional filter to page attempts on a specific track.
+
+        Returns
+        -------
+        A ViewModelPagination object."""
+        try:
+            num_in_page = kwargs.get("num_in_page", config.PAGE_SIZE_LEADERBOARD)
+            track_uid = kwargs.get("track_uid", None)
+
+            # Build a races query.
+            races_q = races.races_query_for(self.patient,
+                track_uid = track_uid)
+            # Return a view model pagination list for this query.
+            return ViewModelPagination.make(
+                races_q.paginate(
+                    page = page, per_page = num_in_page, max_per_page = num_in_page, error_out = False),
+                self.actor,
+                LeaderboardEntryViewModel)
+        except Exception as e:
+            raise e
+    
+    def page_tracks(self, page = 1, **kwargs) -> ViewModelPagination:
+        """Page this User's tracks.
+
+        Arguments
+        ---------
+        :page: The page of tracks to get for this User.
+
+        Keyword arguments
+        -----------------
+        :num_in_page: The number of items per page. Default is PAGE_SIZE_TRACKS.
+
+        Returns
+        -------
+        A ViewModelPagination object."""
+        try:
+            num_in_page = kwargs.get("num_in_page", config.PAGE_SIZE_TRACKS)
+
+            # Build a tracks query.
+            tracks_q = tracks.tracks_query(
+                creator_uid = self.patient.uid)
+            # Return a view model pagination list for this query.
+            return ViewModelPagination.make(
+                tracks_q.paginate(
+                    page = page, per_page = num_in_page, max_per_page = num_in_page, error_out = False),
+                self.actor,
+                TrackViewModel)
+        except Exception as e:
+            raise e
 
 
 class AccountViewModel(BaseViewModel):
@@ -1014,6 +1092,11 @@ class AccountViewModel(BaseViewModel):
         return True
     
     @property
+    def can_create_vehicles(self):
+        """TODO: can create vehicles?"""
+        return True
+    
+    @property
     def vehicles(self) -> ViewModelList:
         """Return a new view model list for all Vehicles belonging to this User."""
         return ViewModelList.make(self.patient.all_vehicles, self.actor, VehicleViewModel)
@@ -1033,6 +1116,30 @@ class AccountViewModel(BaseViewModel):
     def get_nested_serialisation_kwargs(self):
         return dict( exclude = () )
 
+    def create_vehicle(self, request_create_vehicle, **kwargs) -> VehicleViewModel:
+        """Create a vehicle from the given request to create a vehicle. This should be an instance of RequestCreateVehicle. On success, this function will
+        return the newly created vehicle view model.
+
+        Arguments
+        ---------
+        :request_create_vehicle: An instance of RequestCreateVehicle.
+
+        Returns
+        -------
+        A VehicleViewModel."""
+        try:
+            # Check if the User is able to create vehicles. Raise an exception if not.
+            if not self.can_create_vehicles:
+                """TODO: implement this properly."""
+                raise NotImplementedError("Failed to create_vehicle, user is not allowed to; but this is NOT handled.")
+            # Otherwise, create the vehicle with the vehicles module. Supply the current actor, which is the User.
+            new_vehicle = vehicles.create_vehicle(request_create_vehicle,
+                user = self.actor)
+            # Return a new vehicle view model.
+            return VehicleViewModel(self.actor, new_vehicle)
+        except Exception as e:
+            raise e
+        
     def create_track(self, new_track_json, **kwargs) -> TrackViewModel:
         """Create a track from the given loaded track instance. This should be typeof LoadedTrack found in the tracks module. This function will raise an error
         if the User is not able to actually create tracks.

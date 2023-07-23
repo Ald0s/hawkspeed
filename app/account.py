@@ -6,7 +6,7 @@ import hashlib
 import logging
 
 from datetime import datetime, date
-from flask_login import login_user, logout_user, current_user
+from flask_login import login_user, logout_user, current_user, login_fresh, login_remembered
 from email_validator import validate_email, EmailNotValidError
 from password_strength import PasswordPolicy
 from marshmallow import Schema, fields, EXCLUDE, post_load, ValidationError, validates, pre_load
@@ -326,7 +326,7 @@ def logout_local_account(**kwargs):
 
 
 def logout(**kwargs):
-    """"""
+    """Log the current User out, this will clear the current session."""
     try:
         if current_user.is_authenticated:
             LOG.debug(f"Logging out user {current_user}")
@@ -335,6 +335,21 @@ def logout(**kwargs):
     except Exception as e:
         raise e
 
+
+def clean_current_login():
+    """Ensure the login for the current User is not invalid. This will clear login sessions where the User no longer exists. If there are no problems found, this function
+    will silently succeed and return nothing."""
+    try:
+        if login_remembered() and not current_user.get_id():
+            # If login is remembered, but there is no User ID on the current User, looks as though the User is trying to log in on a non-existent cookie.
+            LOG.warning(f"Login attempt from a User failed; login was remembered (so session exists) but there is no ID attached to it. Perhaps User no longer exists.")
+            # Logout the User, which will clear the bad session.
+            logout_user()
+            # Now, raise an unauthorised request failure for the reason of incorrect login.
+            raise error.UnauthorisedRequestFail("incorrect-login")
+    except Exception as e:
+        raise e
+    
 
 def _create_account(request_new_account, **kwargs) -> models.User:
     """A registration request for a User. This will create a new User and prepare it for first time use. The function does not handle validation for arguments. A

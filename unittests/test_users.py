@@ -7,12 +7,12 @@ import base64
 from datetime import date, datetime, timedelta
 from flask import url_for
 from sqlalchemy.exc import IntegrityError
-from unittests.conftest import BaseCase
+from unittests.conftest import BaseWithDataCase
 
 from app import db, config, factory, models, users, error, world
 
 
-class TestUsers(BaseCase):
+class TestUsers(BaseWithDataCase):
     def test_user_player_duplicate(self):
         """Test integrity configuration for user player to ensure that adding a second user player, with different device ID & socket IDs but duplicate User ID
         will still fail."""

@@ -1,3 +1,4 @@
+import os
 import time
 import uuid
 import math
@@ -19,6 +20,7 @@ from flask import g
 from sqlalchemy import asc, desc, or_, and_, func, select, case, insert, union_all
 from sqlalchemy import Table, Column, BigInteger, Boolean, Date, DateTime, Numeric, String, Text, ForeignKey, ForeignKeyConstraint, UniqueConstraint
 from sqlalchemy.types import TypeDecorator, CHAR
+from sqlalchemy.sql.expression import cast
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship, aliased, Mapped, mapped_column, with_polymorphic, declared_attr, column_property, query_expression
 from sqlalchemy.exc import IntegrityError
@@ -284,6 +286,118 @@ class MultiLineStringGeometryMixin(EPSGWrapperMixin):
         self.multi_linestring = multi_linestring
 
 
+class Media(db.Model, HasUUIDMixin):
+    """A model for storing a media file for the purpose of allowing controlled access by Users."""
+    __tablename__ = "media"
+
+    id: Mapped[int] = mapped_column(primary_key = True)
+    # The User that owns this Media directly. Can't be None. If the User is deleted, the Media will also be deleted.
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_.id", ondelete = "CASCADE"), nullable = False)
+
+    # Uri relative path from the supplied base media directory to the media item on disk; not including filename and also with trailing / removed. Ex; static/userdata/test. Can't be None.
+    relative_directory: Mapped[str] = mapped_column(String(256), nullable = False)
+    # The new filename & file extension, in lowercase. Ex; XXXXXXXXXXXXXXXXXX.mp4. Can't be None.
+    filename: Mapped[str] = mapped_column(String(256), nullable = False)
+    # The filename provided by the uploader or source file on disk; extension included and lower case. Ex; supra_burnout_video.mp4. Can't be None. Also, if original filename matches current
+    # filename, this Media will be thought of as a protected internal/test media item and will raise an exception if public resource URL is sought UNLESS currently in DEBUG mode.
+    original_filename: Mapped[str] = mapped_column(String(256), nullable = False)
+    # The extracted file extension, in lowercase. Ex; mp4. Can't be None.
+    file_type: Mapped[str] = mapped_column(String(25), nullable = False)
+    # The size of the file (bytes.) Can't be None.
+    file_size: Mapped[int] = mapped_column(BigInteger(), nullable = False)
+    # A boolean, whether this media item is a duplicate of another. Note; transferring a temporary media to a normal media does not count as duplication. Can't Be None.
+    # Duplicates can usually be deleted safely, meaning they should be used specifically for things like profile/cover images.
+    duplicate: Mapped[bool] = mapped_column(default = False, nullable = False)
+    # A boolean, whether this Media item is currently a temporary entry. Can't be None.
+    temporary: Mapped[bool] = mapped_column(default = False, nullable = False)
+    # A boolean, whether this Media item is public and can be accessed by Users. Can't be None.
+    public: Mapped[bool] = mapped_column(default = False, nullable = False)
+    # A boolean, whether this media item was created by the HawkSpeed system, specifically for use in graphics and iconography.
+    internal: Mapped[bool] = mapped_column(default = False, nullable = False)
+    # When the media was uploaded.
+    created: Mapped[int] = mapped_column(BigInteger(), default = time.time, nullable = False)
+
+    # Irrespective of which album this Media ends up in, this tracks the original uploader/creator, which can only ever be a User. Can't be None.
+    user: Mapped["User"] = relationship(
+        back_populates = "media_",
+        uselist = False)
+
+    def __repr__(self):
+        return f"Media<{self.uid},ofn={self.original_filename}>"
+
+    @property
+    def has_obscured_filename(self):
+        """Returns True if the filename on this Media item can be made public without giving away any unique or original filenames. This is determined by checking whether
+        the filename matches the original filename."""
+        return self.filename != self.original_filename
+
+    @property
+    def is_duplicate(self):
+        return self.duplicate
+
+    @property
+    def is_temporary(self):
+        return self.temporary
+
+    @property
+    def is_public(self):
+        return self.public
+
+    @property
+    def is_internal(self):
+        return self.internal
+
+    @property
+    def public_resource(self):
+        """Returns the absolute path for the externally available resource, that is, if this is a public resource. This path should then be interpreted by
+        something like Nginx. Otherwise, this will raise an exception."""
+        if not self.is_public:
+            """TODO: raise a proper exception."""
+            raise NotImplementedError(f"Resource {self} requested is NOT a publicly available resource. Also this is not handled.")
+        """TODO: implement this properly."""
+        raise NotImplementedError("public_resource() not implemented.")
+
+    @property
+    def fully_qualified_path(self):
+        return os.path.join(config.EXTERNAL_USER_MEDIA_BASE_PATH, self.relative_directory, self.filename)
+
+    def set_relative_directory(self, relative_directory):
+        """Set this Media's relative directory."""
+        self.relative_directory = relative_directory
+
+    def set_temporary(self, temporary):
+        """Set whether this Media is temporary. This can't be changed from False to True. So if the Media is currently not temporary, this
+        function will raise an exception."""
+        if temporary and not self.is_temporary:
+            raise ValueError(f"Failed to set {self} as temporary. It is already NOT temporary.")
+        self.temporary = temporary
+
+    def set_public(self, public):
+        """Set whether this Media is public. If setting to True and the Media is still temporary, this function will fail."""
+        if public and self.is_temporary:
+            raise ValueError(f"Failed to set {self} as public. It is still temporary.")
+        self.public = public
+
+    def set_internal(self, internal):
+        """Set whether this Media is internal."""
+        self.internal = internal
+
+
+@listens_for(Media, "after_delete")
+def del_file(mapper, connection, target):
+    """Listen for each time a Media item is deleted from database. In response to this, ensure the matching resource saved to disk is also deleted."""
+    LOG.debug(f"Media item {target} has just been deleted. We will now delete its respective resource from disk...")
+    if target and target.fully_qualified_path:
+        try:
+            # If fully qualified path is not a file, raise an error.
+            if not os.path.isfile(target.fully_qualified_path):
+                LOG.warning(f"Didn't delete file {target.fully_qualified_path}, it is apparently not even a file!")
+                raise OSError()
+            os.remove(target.fully_qualified_path)
+        except OSError:
+            pass
+
+
 class SnapToRoadTrackPoint(db.Model, PointGeometryMixin):
     """A model for containing a single track point, uniquely identified by an absolute index."""
     __tablename__ = "snap_to_road_track_point"
@@ -476,6 +590,16 @@ class TrackUserRace(db.Model, LineStringGeometryMixin):
     def __repr__(self):
         return f"TrackUserRace<{self.track},{self.user},o={self.is_ongoing},dq={self.is_disqualified}>"
 
+    @property
+    def track_name(self):
+        """Returns the track's name."""
+        return self.track.name
+    
+    @property
+    def track_type(self):
+        """Returns the track's type."""
+        return self.track.track_type
+    
     @hybrid_property
     def stopwatch(self):
         """Instance level property for getting the total amount of time, in milliseconds, elapsed by this race so far. The result is calculated by
@@ -513,7 +637,12 @@ class TrackUserRace(db.Model, LineStringGeometryMixin):
         """Expression level is finished."""
         return and_(cls.finished != None, cls.is_ongoing != True)
 
-    @property
+    @hybrid_property
+    def is_cancelled(self):
+        """Returns True if the race has been cancelled."""
+        return self.cancelled
+    
+    @hybrid_property
     def is_disqualified(self):
         """Returns True if the race has been disqualified."""
         return self.disqualified
@@ -522,11 +651,6 @@ class TrackUserRace(db.Model, LineStringGeometryMixin):
     def vehicle_used(self):
         """Returns the vehicle used by this Player to complete the race."""
         return self.vehicle
-    
-    @property
-    def is_cancelled(self):
-        """Returns True if the race has been cancelled."""
-        return self.cancelled
 
     @property
     def has_progress(self):
@@ -731,6 +855,8 @@ class Track(db.Model, PointGeometryMixin):
     name: Mapped[str] = mapped_column(String(64), nullable = False)
     # The track's description, can't be None.
     description: Mapped[str] = mapped_column(String(256), nullable = False)
+    # Timestamp, in seconds, when this track was created. Can't be None.
+    created: Mapped[int] = mapped_column(BigInteger(), default = time.time, nullable = False)
     # The track's type. Can't be None.
     track_type: Mapped[int] = mapped_column(nullable = False)
     # The track's start point bearing, in degrees. This is the direction in which the Player must face in order to race. Can't be None.
@@ -1128,7 +1254,25 @@ class VehicleYearModel(db.Model):
     @property
     def year(self):
         return self.year_
+    
+    @hybrid_property
+    def make_name(self):
+        return self.make.name
+    
+    @make_name.expression
+    def make_name(cls):
+        """Join dependant. Remember to therefore join VehicleMake somehow."""
+        return VehicleMake.name
 
+    @hybrid_property
+    def model_name(self):
+        return self.model.name
+    
+    @model_name.expression
+    def model_name(cls):
+        """Join dependant. Remember to therefore join VehicleModel somehow."""
+        return VehicleModel.name
+    
 
 class VehicleStock(db.Model):
     """A single stock vehicle. These UIDs can be thought of as associating with a single specific vehicle."""
@@ -1161,11 +1305,11 @@ class VehicleStock(db.Model):
     # The amount of power this motor produces. Can be None.
     power: Mapped[int] = mapped_column(nullable = True)
     # The type of electric motor(s). Can be None.
-    electric_motor_type: Mapped[str] = mapped_column(nullable = True)
+    elec_type: Mapped[str] = mapped_column(nullable = True)
 
     ### Transmission information. ###
     # The transmission type. Can't be None.
-    transmission_type: Mapped[str] = mapped_column(nullable = False)
+    trans_type: Mapped[str] = mapped_column(nullable = False)
     # The number of gears in this transmission. Can't be None.
     num_gears: Mapped[int] = mapped_column(nullable = False)
 
@@ -1186,11 +1330,23 @@ class VehicleStock(db.Model):
     def __repr__(self):
         return f"VehicleStock<{self.title}>"
 
-    @property
+    @hybrid_property
     def title(self):
         """Return a central 'title' for this stock vehicle. This should be a displayable text that uniquely identifies this vehicle and perhaps some of the
         more important options that separates it from the rest."""
         return f"{self.year_model_year_} {self.make.name} {self.model.name}"
+    
+    @title.expression
+    def title(cls):
+        """Expression equivalent for the title property. Remember, this is join dependant. In order for this to work properly, ensure you join vehicle stocks'
+        year_model attribute, then vehicle year models' make attribute, then vehicle year models' model attribute in your end query."""
+        return (
+            cast(cls.year_model_year_, String)
+            + " "
+            + cast(VehicleYearModel.make_name, String)
+            + " "
+            + cast(VehicleYearModel.model_name, String)
+        )
     
     def set_year_model(self, make_uid, model_uid, year):
         """Set the vehicle year model to which this vehicle stock belongs."""
@@ -1214,9 +1370,9 @@ class VehicleStock(db.Model):
         """Set this vehicle's displacement, in CC."""
         self.displacement = displacement_cc
     
-    def set_induction_type(self, induction_type):
+    def set_induction_type(self, induction):
         """Set this vehicle's induction type."""
-        self.induction_type = induction_type
+        self.induction = induction
 
     def set_fuel_type(self, fuel_type):
         """Set this vehicle's fuel type."""
@@ -1226,13 +1382,13 @@ class VehicleStock(db.Model):
         """Set this vehicle's power amount (for electric motors.)"""
         self.power = power
 
-    def set_electric_motor_type(self, electric_motor_type):
+    def set_electric_motor_type(self, elec_type):
         """Set this vehicle's electric motor(s) type(s)."""
-        self.electric_motor_type = electric_motor_type
+        self.elec_type = elec_type
 
-    def set_transmission_type(self, transmission_type):
+    def set_transmission_type(self, trans_type):
         """Set this vehicle's transmission type."""
-        self.transmission_type = transmission_type
+        self.trans_type = trans_type
 
     def set_num_gears(self, num_gears):
         """Set the number of gears on this vehicle's transmission."""
@@ -1246,10 +1402,13 @@ class UserVehicle(db.Model, HasUUIDMixin):
     id: Mapped[int] = mapped_column(primary_key = True)
     # The User's ID that owns this vehicle, can't be None.
     user_id: Mapped[int] = mapped_column(ForeignKey("user_.id", ondelete = "CASCADE"), nullable = False)
+    # A UID for the chosen VehicleStock that represents this User vehicle's parent. Can't be None.
+    vehicle_stock_vehicle_uid: Mapped[str] = mapped_column(String(128), ForeignKey("vehicle_stock.vehicle_uid", ondelete = "CASCADE"), nullable = False)
 
-    # For now, we will store the vehicle info as just a string, that we don't really bother validating.
-    """TODO: perhaps a better way of storing vehicles?"""
-    text: Mapped[str] = mapped_column(String(64), nullable = False)
+    # The stock Vehicle that represents this User vehicle's parent. Can't be None.
+    stock: Mapped[VehicleStock] = relationship(
+        uselist = False,
+        foreign_keys = [vehicle_stock_vehicle_uid])
 
     # All races this vehicle has been involved in. This is a dynamic relationship. Unordered.
     races_: Mapped[TrackUserRace] = relationship(
@@ -1263,16 +1422,18 @@ class UserVehicle(db.Model, HasUUIDMixin):
         uselist = False)
     
     def __repr__(self):
+        if not self.stock:
+            return "UserVehicle<***NEW***>"
         return f"UserVehicle<{self.title},u={self.user}>"
     
     @property
     def title(self):
         """Returns a string that can be used as this vehicle's display name."""
-        return self.text
+        return self.stock.title
     
-    def set_text(self, text):
-        """Set this vehicle's text."""
-        self.text = text
+    def set_vehicle_stock(self, vehicle_stock):
+        """Set this vehicle's stock parent."""
+        self.stock = vehicle_stock
     
 
 class UserPlayer(db.Model, PointGeometryMixin):
@@ -1426,6 +1587,12 @@ class User(UserMixin, db.Model, HasUUIDMixin):
         cascade = "all, delete")
     # Dynamic relationship for all verifies. Unordered.
     verifies_: Mapped[List[UserVerify]] = relationship(
+        back_populates = "user",
+        uselist = True,
+        lazy = "dynamic",
+        cascade = "all, delete")
+    # Dynamic relationship for all medias. Unordered.
+    media_: Mapped[List[Media]] = relationship(
         back_populates = "user",
         uselist = True,
         lazy = "dynamic",

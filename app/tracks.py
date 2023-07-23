@@ -42,6 +42,37 @@ class TrackInspectionFailed(Exception):
         self.extra_info = kwargs.get("extra_info", None)
 
 
+def tracks_query(**kwargs):
+    """Assemble a query for a list of tracks matching the given criteria. If no criteria is valid, this function will raise an exception. All tracks will be order in
+    descending order by the created attribute.
+    
+    Keyword arguments
+    -----------------
+    :creator_uid: A User's UID to filter all resulting tracks to those created by this User.
+    
+    Returns
+    -------
+    The query for tracks."""
+    try:
+        creator_uid = kwargs.get("creator_uid", None)
+        if not creator_uid:
+            raise Exception("No valid arguments passed to tracks_query!")
+
+        # Build a query for track.
+        tracks_q = db.session.query(models.Track)
+        # If creator UID is given, attach it as a filter.
+        if creator_uid:
+            tracks_q = tracks_q\
+                .join(models.User, models.User.id == models.Track.user_id)\
+                .filter(models.User.uid == creator_uid)
+        # Apply order by created in descending fashion.
+        tracks_q = tracks_q\
+            .order_by(desc(models.Track.created))
+        return tracks_q
+    except Exception as e:
+        raise e
+    
+
 def leaderboard_query_for(track, **kwargs):
     """Return a query for the leaderboard from the given Track. The leaderboard is simply ordered from slowest stopwatch time to fasted stopwatch time. This function
     will return the query object itself, which can be paginated or received in full. If our current environment is either LiveDevelopment or Production, this function
