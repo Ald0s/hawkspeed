@@ -89,3 +89,6 @@
 * Added Media entity for storing various types of media such as images and videos,
 * Implemented paging a User's race attempt history,
 * Added finishing_place query expression support to get_race, with must_be_finished flag.
+
+## Version 0.01.04
+* Wrote stub tests for UserViewModel and VehicleViewModel.

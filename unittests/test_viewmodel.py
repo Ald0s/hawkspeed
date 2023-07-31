@@ -10,6 +10,37 @@ from unittests.conftest import BaseWithDataCase
 from app import db, config, factory, models, login_manager, tracks, error, viewmodel
 
 
+class TestUserViewModel(BaseWithDataCase):
+    def test_user_view_model_basics(self):
+        """Test all functionality on the vehicle view model.
+        Create a new User, provide them with a single vehicle.
+        Create a user view model for that User from the perspective of the same User.
+        Check that is you returns True."""
+        # Create a new User.
+        aldos = factory.create_user("alden@mail.com", "password",
+            username = "alden", vehicle = "1994 Toyota Supra")
+        db.session.flush()
+        # Create a user view model for this User.
+        user_view_model = viewmodel.UserViewModel(aldos, aldos)
+        # Ensure is you is True.
+        self.assertEqual(user_view_model.is_you, True)
+
+
+class TestVehicleViewModel(BaseWithDataCase):
+    def test_vehicle_view_model_basics(self):
+        """Test all functionality on the vehicle view model.
+        Create a new User, provide them with a single vehicle.
+        Create a vehicle view model for that User's first vehicle."""
+        # Create a new User.
+        aldos = factory.create_user("alden@mail.com", "password",
+            username = "alden", vehicle = "1994 Toyota Supra")
+        db.session.flush()
+        # Get that User's vehicles.
+        all_vehicles = aldos.all_vehicles
+        # Now, create a view model for the first one.
+        vehicle_view_model = viewmodel.VehicleViewModel(aldos, all_vehicles[0])
+
+
 class TestTrackViewModel(BaseWithDataCase):
     def test_track_view_model_basics(self):
         """Import an example track; yarraboulevard."""
