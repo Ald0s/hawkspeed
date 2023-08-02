@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import re
 import time
+import mimetypes
 import logging
 import sys, inspect
 
@@ -301,6 +302,32 @@ class BaseViewModel(SerialisableMixin):
         raise NotImplementedError(f"get_model_class() not implemented on {cls}")
 
 
+class MediaViewModel(BaseViewModel):
+    """A view model for calculating abilities available to an actor toward a specific Media item. This view model does not currently serialise."""
+    @property
+    def can_view(self):
+        """Return True if the actor is allowed to view this Media item, or False otherwise."""
+        return True
+    
+    @property
+    def is_image(self):
+        """Return True if this is an image-type Media item."""
+        return True
+    
+    @property
+    def is_video(self):
+        """Return True if this is a video-type Media item."""
+        return False
+    
+    @property
+    def mimetype(self):
+        """Guess the mimetype of this Media item. Expect a tuple to be returned in the format (mimetype, encoding)."""
+        return mimetypes.guess_type(self.patient.filename)
+    
+    def serialise(self, **kwargs):
+        raise NotImplementedError(f"MediaViewModel is currently not able to be serialised!")
+    
+
 class VehicleViewModel(BaseViewModel):
     """A view model for representing a specific User's vehicle."""
     class VehicleViewSchema(BaseViewModel.BaseViewSchema):
@@ -478,6 +505,8 @@ class TrackPathViewModel(BaseViewModel):
             unknown = EXCLUDE
         # The owning Track's UID. Can't be None.
         track_uid           = fields.Str(allow_none = False)
+        # The hash for this Track. Can't be None.
+        hash                = fields.Str(allow_none = False)
         # The track path's CRS. Can't be None.
         crs                 = fields.Int(allow_none = False)
         # All points belonging to this track's path.
@@ -486,6 +515,10 @@ class TrackPathViewModel(BaseViewModel):
     @property
     def track_uid(self):
         return self.patient.uid
+    
+    @property
+    def hash(self):
+        return self.patient.hash
     
     @property
     def crs(self):

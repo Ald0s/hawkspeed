@@ -10,7 +10,7 @@ from sqlalchemy.orm import with_expression
 from marshmallow import fields, Schema, post_load, EXCLUDE
 
 from .compat import insert
-from . import db, config, models, error
+from . import db, config, models, media, error
 
 LOG = logging.getLogger("hawkspeed.vehicles")
 LOG.setLevel( logging.DEBUG )
@@ -211,6 +211,7 @@ class LoadedMake():
     def __init__(self, **kwargs):
         self.uid = kwargs.get("uid")
         self.name = kwargs.get("name")
+        self.logo = kwargs.get("logo") 
         self.models = kwargs.get("models")
 
 
@@ -220,6 +221,7 @@ class MakeSchema(Schema):
         unknown = EXCLUDE
     uid                     = fields.Str(allow_none = False, required = True, data_key = "make_uid")
     name                    = fields.Str(allow_none = False, required = True, data_key = "make_name")
+    logo                    = media.InternalMediaField(required = True, allow_none = True)
 
     # Only when we load we'll also load all models belonging to this make.
     models                  = fields.Dict(keys = fields.Str(), values = fields.Nested(ModelSchema, many = False), load_only = True)
@@ -358,7 +360,7 @@ def update_vehicle_data(vehicle_data, **kwargs) -> UpdateVehicleDataResult:
         for make_name, read_make in vehicle_data.makes.items():
             # Merge each make, too.
             vehicle_make = models.VehicleMake(
-                uid = read_make.uid, name = make_name)
+                uid = read_make.uid, name = make_name, logo = read_make.logo)
             db.session.merge(vehicle_make)
             # Within each read make, iterate all models. Merge these, too.
             for model_name, read_model in read_make.models.items():

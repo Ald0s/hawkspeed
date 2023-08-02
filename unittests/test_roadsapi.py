@@ -5,10 +5,11 @@ import json
 import urllib.parse
 import base64
 
+from sqlalchemy import func
 from datetime import date, datetime, timedelta
 from unittests.conftest import BaseWithDataCase
 
-from app import db, config, factory, error
+from app import db, config, models, factory, error
 from app.tasks import roadsapi
 
 
@@ -39,14 +40,47 @@ class TestRoadsAPI(BaseWithDataCase):
         db.session.flush()
         return track
 
-    def test_snap_to_roads_models(self):
-        """Test that deleting a snap to road order model will automatically delete both the unsnapped and snapped references.
-        Test that deleting a snap to roads order model does NOT delete the track."""
-        self.assertEqual(True, False)
-
     def test_process_snapped_points(self):
-        """"""
-        self.assertEqual(True, False)
+        """Test the processing of snapped points.
+        Create a new test User and import a test track. There should be 143 total points.
+        Get the very first batch of points from the unsnapped collection; batches should be 100 points long.
+        Transform these points into SnappedPoint containers - as can be expected from server.
+        Pass these to be processed.
+        Expect this operation to be successful.
+        Expect 100 points in total to be snapped.
+        Expect 43 points in total to be unsnapped.
+        Expect this order to be 69% complete."""
+        # Create a random User.
+        user1 = self.get_random_user()
+        db.session.flush()
+        # Create a track for this User.
+        track = self._get_test_track(user1)
+        # Call the new order function for this track.
+        new_order = roadsapi.new_order(track)
+        db.session.add(new_order)
+        db.session.flush()
+        # Get a generator for batches.
+        batch_it = roadsapi.iter_unsnapped_batches(new_order)
+        # Get an unsnapped batch.
+        batch_idx, unsnapped_points = next(batch_it)
+        # Now, process this list of points into a list of SnappedPoint containers.
+        snapped_points = [roadsapi.SnappedPoint(
+            location = roadsapi.LatitudeLongitudeLiteral(latitude = up.geodetic_point.y, longitude = up.geodetic_point.x), place_id = "EXAMPLEPLACE", original_index = idx) for idx, up in enumerate(unsnapped_points)]
+        # Now, pass these to be processed.
+        new_order = roadsapi.process_snapped_points(new_order, unsnapped_points, snapped_points)
+        # Expect the operation to pass.
+        db.session.flush()
+        # Expect 100 points have been snapped.
+        self.assertEqual(new_order.num_points_snapped, 100)
+        # Expect 43 points have yet to be snapped.
+        self.assertEqual(new_order.num_points_unsnapped, 43)
+        # Expect this to be 69% done.
+        self.assertEqual(new_order.percent_snapped, 69)
+        # Get the next unsnapped batch.
+        batch_idx, unsnapped_points = next(batch_it)
+        # Ensure batch idx is 1, ensure there's 43 points in unsnapped points.
+        self.assertEqual(batch_idx, 1)
+        self.assertEqual(len(unsnapped_points), 43)
     
     def test_iter_unsnapped_batches(self):
         """Test iterating unsnapped batches.
@@ -70,6 +104,9 @@ class TestRoadsAPI(BaseWithDataCase):
         total_batches = list(roadsapi.iter_unsnapped_batches(new_order))
         # Ensure there's num_unsnapped_batches.
         self.assertEqual(len(total_batches), num_unsnapped_batches)
+        # Ensure there's 100 points in the first batch, and 43 in the second.
+        self.assertEqual(len(total_batches[0][1]), 100)
+        self.assertEqual(len(total_batches[1][1]), 43)
     
     def test_get_order(self):
         """Test ability to get an existing order.
@@ -141,3 +178,47 @@ class TestRoadsAPI(BaseWithDataCase):
         # Ensure there's 143 points in unsnapped track and 0 in snapped.
         self.assertEqual(new_order.unsnapped_track.num_points, 143)
         self.assertEqual(new_order.snapped_track.num_points, 0)
+    
+    def test_attempt_live_api_in_dbg(self):
+        """Test the roadsapi module's error receovery capability if a snap to roads request is performed while in test mode.
+        Call the new order function, get back a new order."""
+        # Set config to require snap to roads, use google maps and also set a dud key.
+        config.USE_GOOGLE_MAPS_API = True
+        config.REQUIRE_SNAP_TO_ROADS = True
+        config.GOOGLE_MAPS_API_KEY = "ASDASDAJNDASJD"
+        # Create a random User.
+        user1 = self.get_random_user()
+        db.session.flush()
+        # Import a test track.
+        track = self.create_track_from_gpx(user1, "yarra_boulevard.gpx",
+            is_verified = True, is_snapped_to_roads = False)
+        db.session.flush()
+        # Ensure this track is not snapped to roads.
+        self.assertEqual(track.is_snapped_to_roads, False)
+        # Ensure we have 0 entries for all the following tables; SnapToRoadOrder, SnapToRoadTrack, SnapToRoadTrackPoint.
+        self.assertEqual(db.session.query(func.count(models.SnapToRoadOrder.id)).scalar(), 0)
+        self.assertEqual(db.session.query(func.count(models.SnapToRoadTrack.id)).scalar(), 0)
+        self.assertEqual(db.session.query(func.count(models.SnapToRoadTrackPoint.id)).scalar(), 0)
+        # Now, attempt to invoke roadsapi to snap this track to roads.
+        snap_result = roadsapi.snap_to_road(track)
+        # Ensure this was a failure.
+        self.assertEqual(snap_result.is_successful, False)
+        # Ensure we STILL have 0 entries for all the following tables; SnapToRoadOrder, SnapToRoadTrack, SnapToRoadTrackPoint.
+        self.assertEqual(db.session.query(func.count(models.SnapToRoadOrder.id)).scalar(), 0)
+        self.assertEqual(db.session.query(func.count(models.SnapToRoadTrack.id)).scalar(), 0)
+        self.assertEqual(db.session.query(func.count(models.SnapToRoadTrackPoint.id)).scalar(), 0)
+
+    def test_google_api_error(self):
+        """Given a test Google API error that we can expect, ensure we can retrieve all data points from it.
+        Load the error dictionary via the schema.
+        With the result, ensure code, message and status all match.
+        Ensure there's 1 detail."""
+        test_api_error_d = {"error": {"code": 403, "message": "Requests from this Android client application <empty> are blocked.", "status": "PERMISSION_DENIED", "details": [{"@type": "type.googleapis.com/google.rpc.ErrorInfo", "reason": "API_KEY_ANDROID_APP_BLOCKED", "domain": "googleapis.com", "metadata": {"consumer": "projects/XXXXXXXXXX", "service": "roads.googleapis.com"}}]}}
+        # Load the error dict.
+        google_api_error = roadsapi.GoogleApiErrorSchema().load(test_api_error_d)
+        # Now, ensure the code matches.
+        self.assertEqual(google_api_error.error.code, 403)
+        # Ensure status catches.
+        self.assertEqual(google_api_error.error.status, "PERMISSION_DENIED")
+        # Ensure message matches.
+        self.assertEqual(google_api_error.error.message, "Requests from this Android client application <empty> are blocked.")

@@ -1,5 +1,6 @@
 """A module, designed to be used along with Google Maps Roads API through a background worker. Its purpose is to snap an incoming track to the nearest roads
 prior to allowing players to access and race."""
+import time
 import requests
 import urllib.parse
 import pyproj
@@ -8,15 +9,42 @@ import logging
 
 from marshmallow import Schema, fields, EXCLUDE, post_load
 
-from .. import db, config, models
+from .. import db, config, models, tracks
 # from . import celery
 
 LOG = logging.getLogger("hawkspeed.tasks.roadsapi")
 LOG.setLevel( logging.DEBUG )
 
 
+class SnapToRoadsError(Exception):
+    ERROR_API_DISABLED = "apidisabled"
+    ERROR_INVALID_KEY = "invalidkey"
+    ERROR_INVALID_ENVIRONMENT = "badenv"
+    ERROR_SNAP_NOT_REQUIRED = "nosnap"
+    ERROR_ALREADY_SNAPPED = "alreadysnapped"
+
+    def __init__(self, code, **kwargs):
+        self.code = code
+
+
 class SnapToRoadsApiError(Exception):
     """An exception thrown when snap to roads api call fails."""
+    @property
+    def code(self):
+        return self.google_api_error.error.code
+    
+    @property
+    def status(self):
+        return self.google_api_error.error.status
+    
+    @property
+    def message(self):
+        return self.google_api_error.error.message
+    
+    @property
+    def details(self):
+        return self.google_api_error.error.details
+    
     def __init__(self, google_api_error, **kwargs):
         self.google_api_error = google_api_error
 
@@ -103,19 +131,28 @@ class SnapToRoadsResponseSchema(Schema):
         return SnapToRoadsResponse(**data)
 
 
-class GoogleApiError():
-    """A container for a loaded Google API error."""
+class HttpError():
+    """A container for a loaded HTTP error, from Google.
+    
+    For more information and possible values:
+    https://developers.google.com/maps/documentation/roads/errors#errors"""
     def __init__(self, **kwargs):
         self.code = kwargs.get("code")
         self.message = kwargs.get("message")
         self.status = kwargs.get("status")
+        self.details = kwargs.get("details", None)
 
 
-class GoogleApiErrorSchema(Schema):
-    """A schema for deserialising a Google API error.
+class HttpErrorSchema(Schema):
+    """A schema for deserialising a HTTP error, from Google.
     
     For more information and possible values:
-    https://developers.google.com/maps/documentation/roads/errors#errors"""
+    https://developers.google.com/maps/documentation/roads/errors#errors
+    
+    There is an attribute called 'details' in here which is a list of dictionaries.
+    TODO: implement this at some stage because it has been removed.
+    details                 = fields.List(fields.Dict(keys = fields.Str(), values = fields.Str()),
+        required = False, allow_none = True, load_default = None)"""
     class Meta:
         unknown = EXCLUDE
     # The HTTP status code. Required.
@@ -128,6 +165,27 @@ class GoogleApiErrorSchema(Schema):
     status                  = fields.Str(
         required = True, allow_none = False, data_key = "status")
 
+    @post_load
+    def http_error_post_load(self, data, **kwargs) -> HttpError:
+        return HttpError(**data)
+
+
+class GoogleApiError():
+    """A container for a loaded Google API error."""
+    def __init__(self, **kwargs):
+        self.error = kwargs.get("error")
+
+
+class GoogleApiErrorSchema(Schema):
+    """A schema for deserialising a Google API error.
+    
+    For more information and possible values:
+    https://developers.google.com/maps/documentation/roads/errors#errors"""
+    class Meta:
+        unknown = EXCLUDE
+    # The HTTP error.
+    error                   = fields.Nested(HttpErrorSchema, many = False, required = True, allow_none = False)
+    
     @post_load
     def google_api_error_post_load(self, data, **kwargs) -> GoogleApiError:
         return GoogleApiError(**data)
@@ -145,8 +203,6 @@ def _snap_to_roads_api_call(full_url):
     -------
     An integer and a dict; the status code and response body respectively."""
     try:
-        if config.APP_ENV != "Production" and config.APP_ENV != "LiveDevelopment":
-            raise NotImplementedError("Calling active snap to roads API function is not allowed in any of the test/debug environments.")
         # Use requests to actually perform the request.
         response = requests.get(full_url)
         # If status code is 200, we will return the status code and the JSON function result.
@@ -171,15 +227,21 @@ def send_snap_to_roads_request(batch_idx, unsnapped_points, **kwargs) -> SnapToR
     ---------
     :batch_idx: The index for the batch that is to be snapped.
     :unsnapped_points: A list of Shapely Point objects, in XY format, to snap to roads.
-    
+
     Keyword arguments
     -----------------
     :snap_to_roads_base_url: A string, the base URL behind parameters. For example; https://roads.googleapis.com/v1/snapToRoads, by default, SNAP_TO_ROADS_BASE_URL is used.
-    :get_request_func: A function that takes a string (the full URL) and returns an int and a dict; status code and response."""
+    :get_request_func: A function that takes a string (the full URL) and returns an int and a dict; status code and response.
+    :force_live_api: By default, using Google Maps API will fail if environment is not a Production-type. Pass True here to override. Default is False."""
     try:
         snap_to_roads_base_url = kwargs.get("snap_to_roads_base_url", config.SNAP_TO_ROADS_BASE_URL)
         get_request_func = kwargs.get("get_request_func", _snap_to_roads_api_call)
+        force_live_api = kwargs.get("force_live_api", False)
 
+        # Error out if we are not allowed to use live snap to roads API call.
+        if get_request_func == _snap_to_roads_api_call and ((config.APP_ENV != "Production" and config.APP_ENV != "LiveDevelopment") and not force_live_api):
+            LOG.error("Calling active snap to roads API function is not allowed in any of the test/debug environments.")
+            raise SnapToRoadsError(SnapToRoadsError.ERROR_INVALID_ENVIRONMENT)
         # Encode params right here, join all points in YX (latitude,longitude) format with a comma separating, then join all points with a pipe.
         request_params_d = dict(
             path = "|".join( f"{str(latitude)},{str(longitude)}" for longitude, latitude in [point.coords[0] for point in unsnapped_points] ),
@@ -283,19 +345,22 @@ def iter_unsnapped_batches(order, **kwargs):
     try:
         # Get the unsnapped track points as a list right now, since the unsnapped track itself will have points recursively removed.
         all_unsnapped_track_points = order.unsnapped_track.track_points
+        batch_idx = 0
         # Now, iterate unsnapped batches as required.
-        for batch_idx in range(0, len(all_unsnapped_track_points), config.NUM_POINTS_PER_SNAP_BATCH):
+        for current_point_idx in range(0, len(all_unsnapped_track_points), config.NUM_POINTS_PER_SNAP_BATCH):
             # For each batch index, get a range of points from the geodetic linestring, NUM_POINTS_PER_SNAP_BATCH in length.
-            unsnapped_track_points = all_unsnapped_track_points[batch_idx:batch_idx+config.NUM_POINTS_PER_SNAP_BATCH]
+            unsnapped_track_points = all_unsnapped_track_points[current_point_idx:current_point_idx+config.NUM_POINTS_PER_SNAP_BATCH]
             # Yield both the batch index and the list of unsnapped track points.
             yield batch_idx, unsnapped_track_points
+            batch_idx = batch_idx + 1
     except Exception as e:
         raise e
 
 
 def process_snapped_points(order, unsnapped_track_points, snapped_points, **kwargs) -> models.SnapToRoadOrder:
     """Process the unsnapped track points against the given snapped points. There must be a one-to-one relationship between the two lists, when snapped
-    points is sorted in ascending order by original index.
+    points is sorted in ascending order by original index. As unsnapped points are processed, their snapped equivalents are added to the snapped track, but
+    not deleted from unsnapped.
     
     Arguments
     ---------
@@ -322,20 +387,17 @@ def process_snapped_points(order, unsnapped_track_points, snapped_points, **kwar
         for unsnapped_track_point, snapped_point_ in zip(unsnapped_track_points, sorted(snapped_points, key = lambda x: x.original_index)):
             # Add a new track point, representing the snapped point, to the snapped point track, with the same absolute index as the unsnapped point has.
             snapped_track_point = models.SnapToRoadTrackPoint()
-            snapped_track_point.set_absolute_idx(unsnapped_track_point.absolute_index)
+            snapped_track_point.set_absolute_idx(unsnapped_track_point.absolute_idx)
             # Set CRS to match that of unsnapped track's.
             snapped_track_point.set_crs(unsnapped_track.crs)
             # Now, create a Shapely point in format XY from the latitude & longitude in snapped point. Transform this using the geodetic 
-            geodetic_snapped_point = shapely.geometry.Point(snapped_point_.longitude, snapped_point_.latitude)
+            geodetic_snapped_point = shapely.geometry.Point(snapped_point_.location.longitude, snapped_point_.location.latitude)
             # Transform this geodetic snapped point via transformer.
             snapped_point = shapely.ops.transform(transformer_.transform, geodetic_snapped_point)
             # Set this snapped point as the position on our new snapped track point.
             snapped_track_point.set_position(snapped_point)
             # Finally, add the snapped track point to our snapped track.
             snapped_track.add_point(snapped_track_point)
-            # Now, we'll delete the unsnapped track point from the unsnapped track and delete it.
-            unsnapped_track.remove_point(unsnapped_track_point)
-            db.session.delete(unsnapped_track_point)
         # Successfully made it this far, return the order.
         LOG.debug(f"Successfully verified {len(snapped_points)} points, and moved from unsnapped to snapped.")
         return order
@@ -343,7 +405,43 @@ def process_snapped_points(order, unsnapped_track_points, snapped_points, **kwar
         raise e
 
 
-def snap_to_road(track, **kwargs):
+class SnapToRoadResult():
+    """A container for the result of snapping a track's path to roads via Google Maps API."""
+    @property
+    def is_successful(self):
+        """Returns True if this snap to road order has been successful."""
+        return self._successful
+    
+    @property
+    def time_taken(self):
+        """Returns the total time, in seconds, this snap to road order took to complete."""
+        return self._time_taken
+    
+    @property
+    def track(self):
+        """Return the Track that has been snapped, or failed to be snapped."""
+        return self._track
+    
+    def __init__(self, _track, **kwargs):
+        self._track = _track
+        self._error_exc = kwargs.get("exception", None)
+        self._time_taken = None
+        # If snap to road order is not None, we'll extract information from it, then delete it.
+        _snap_to_road_order = kwargs.get("snap_to_road_order", None)
+        if _snap_to_road_order:
+            self._successful = True
+            self._destroy_order(_snap_to_road_order)
+        else:
+            self._successful = False
+
+    def _destroy_order(self, snap_to_road_order, **kwargs):
+        # Calculate time taken.
+        self._time_taken = time.time() - snap_to_road_order.created
+        # Destroy the order.
+        db.session.delete(snap_to_road_order)
+
+
+def snap_to_road(track, **kwargs) -> SnapToRoadResult:
     """Given a Track instance, communicate with Google API to snap its geometry to the nearest road. This function will not execute if no maps API key is set,
     API functions are disabled or an API function fails due to billing issues at any point. This step will set the track as snapped to roads upon success, and
     will fail if we are configured to not use google maps or no google maps API key is given. This step will automatically set the track as snapped if we are
@@ -351,28 +449,37 @@ def snap_to_road(track, **kwargs):
     
     Arguments
     ---------
-    :track: The Track to snap to road."""
+    :track: The Track to snap to road.
+
+    Keyword arguments
+    -----------------
+    :force_live_api: By default, using Google Maps API will fail if environment is not a Production-type. Pass True here to override. Default is False.
+    
+    Returns
+    -------
+    An instance of SnapToRoadResult, showing the result of this order."""
     try:
+        force_live_api = kwargs.get("force_live_api", False)
+
         if track.is_snapped_to_roads:
-            LOG.warning(f"Attempted to pass a Track that is already verified to snap_to_road. This will not continue.")
-            """TODO: track is verified, no need to continue this."""
-            raise NotImplementedError()
+            LOG.warning(f"Attempted to pass a Track that has already been snapped to roads. This will not continue.")
+            raise SnapToRoadsError(SnapToRoadsError.ERROR_ALREADY_SNAPPED)
         elif not config.REQUIRE_SNAP_TO_ROADS:
-            LOG.debug(f"We are configured to not require snapping to roads for new race tracks. The track {track} will therefore be immediately set as snapped to roads.")
-            raise NotImplementedError("SET IS SNAPPED TO ROADS TO TRUE SOMEWHERE")
+            raise SnapToRoadsError(SnapToRoadsError.ERROR_SNAP_NOT_REQUIRED)
         elif not config.USE_GOOGLE_MAPS_API:
             LOG.warning(f"Attempt to snap a Track to road will not continue; server is configured against using Google Maps API. We will therefore verify this track as it is.")
-            """TODO: configured to not use google maps api."""
-            raise NotImplementedError()
+            raise SnapToRoadsError(SnapToRoadsError.ERROR_API_DISABLED)
         elif not config.GOOGLE_MAPS_API_KEY:
             LOG.error(f"Failed to snap track {track} to road! We are configured to use Google Maps API, but there's no key set.")
-            """TODO: configured to use google maps api, but no key configured. fail."""
-            raise NotImplementedError()
+            raise SnapToRoadsError(SnapToRoadsError.ERROR_INVALID_KEY)
         # Check for an existing snap to road order for this track, create one if it does not already exist.
         order = get_order(track.id)
         if not order:
             LOG.debug(f"No snap-to-roads order exists for given track {track}, creating one now...")
             order = new_order(track)
+            # Remember to add to session, flush to persist.
+            db.session.add(order)
+            db.session.flush()
         else:
             LOG.debug(f"Continuing snap-to-roads for track {track}. We have snapped {order.percent_snapped}% to roads.")
         # Iterate to the number of batches to snap remaining for this order.
@@ -381,7 +488,8 @@ def snap_to_road(track, **kwargs):
                 # For each batch of unsnapped points, send a snap to roads request. On success, this should return a snap to roads response.
                 # At this point, we will map the unsnapped track points to a list of geodetic Shapely points.
                 unsnapped_points = [track_point.geodetic_point for track_point in unsnapped_track_points]
-                snap_to_roads_response = send_snap_to_roads_request(batch_idx, unsnapped_points)
+                snap_to_roads_response = send_snap_to_roads_request(batch_idx, unsnapped_points,
+                    force_live_api = force_live_api)
                 # From the response, get the snapped points container and the warning message.
                 snapped_points = snap_to_roads_response.snapped_points
                 warning_message = snap_to_roads_response.warning_message
@@ -392,11 +500,52 @@ def snap_to_road(track, **kwargs):
                     raise NotImplementedError("snap_to_road failed because warning message was not None, and we haven't handled this yet.")
                 # Process the snapped points into database, receiving back the order.
                 order = process_snapped_points(order, unsnapped_track_points, snapped_points)
-                # We will commit after every successful processing of a batch.
-                db.session.commit()
+                # We will flush after every successful processing of a batch.
+                db.session.flush()
+            except SnapToRoadsError as stna:
+                # Failed to run snap to roads as the API is currently not allowed in this environment.
+                db.session.delete(order)
+                raise stna
             except SnapToRoadsApiError as strae:
-                """TODO: handle snap to roads API error case-by-case here."""
-                raise NotImplementedError()
-        """TODO: report results on the snapping."""
+                # API error occurred, there's no reason to every continue if this ever occurs.
+                db.session.delete(order)
+                raise strae
+        # Calculate a new hash for this track's path, set that on the track's path.
+        path_b2b_hash = tracks.calculate_track_path_hash(track.path)
+        track.path.set_hash(path_b2b_hash)
+        # Made it all the way through. We can now set this track to a snapped status.
+        track.set_snapped_to_roads(True)
+        # Return a result object here.
+        return SnapToRoadResult(track, 
+            snap_to_road_order = order)
+    except SnapToRoadsApiError as strae:
+        # A google maps API error has occurred. This is where we'll determine if this error should result in the disabling of access to maps.
+        if strae.code == 400:
+            """TODO: handle this."""
+            raise NotImplementedError("SnapToRoads API error not correctly handled.")
+        elif strae.code == 403:
+            """TODO: handle this."""
+            raise NotImplementedError("SnapToRoads API error not correctly handled.")
+        elif strae.code == 404:
+            """TODO: handle this."""
+            raise NotImplementedError("SnapToRoads API error not correctly handled.")
+        elif strae.code == 429:
+            """TODO: handle this."""
+            raise NotImplementedError("SnapToRoads API error not correctly handled.")
+        else:
+            raise NotImplementedError(f"Failed to process snap to roads API error! Unrecognised google maps API error: Code: {strae.code}, Status: {strae.status}, Message: {strae.message}")
+    except SnapToRoadsError as stna:
+        # Now, perform actions based on value of code.
+        if stna.code == SnapToRoadsError.ERROR_SNAP_NOT_REQUIRED:
+            # Snap to roads is not required, we'll simply therefore set this track to snapped.
+            LOG.warning(f"We are configured to not require snapping to roads for new race tracks. The track {track} will therefore be immediately set as snapped to roads.")
+            track.set_snapped_to_roads(True)
+        # Return a result here.
+        return SnapToRoadResult(track, 
+            exception = stna)
     except Exception as e:
+        # Re-raise any unknown exception.
         raise e
+    finally:
+        # Always commit on the way out.
+        db.session.commit()

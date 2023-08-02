@@ -17,14 +17,22 @@ class TestTracks(BaseWithDataCase):
             username = "alden", vehicle = "1994 Toyota Supra")
         db.session.flush()
         # Test that we can load a track from GPX.
-        track_from_gpx = tracks.create_track_from_gpx("example1.gpx",
-            intersection_check = False)
-        """TODO: some verifies here."""
+        track_from_gpx = tracks.create_track_from_gpx("yarra_boulevard.gpx",
+            intersection_check = False, is_snapped_to_roads = False, is_verified = False)
+        print(track_from_gpx.track.path.hash)
+        # Ensure that the track that's just been created, is not snapped to roads, but is verified.
+        self.assertEqual(track_from_gpx.track.snapped_to_roads, False)
+        self.assertEqual(track_from_gpx.track.verified, True)
+        # Ensure the created track is a sprint type.
+        self.assertEqual(track_from_gpx.track.track_type, models.Track.TYPE_SPRINT)
         # Test that we can load a track from JSON, that is already verified (no need to verify recorded attributes.)
         with open(os.path.join(os.getcwd(), config.IMPORTS_PATH, "json-routes", "example2.json"), "r") as f:
             example2_json = json.loads(f.read())
         track_from_json_2 = tracks.create_track_from_json(example2_json,
             is_verified = True, intersection_check = False)
+        # Verify track path hash for both are not None.
+        self.assertIsNotNone(track_from_gpx.track.path.hash)
+        self.assertIsNotNone(track_from_json_2.track.path.hash)
         """TODO: some verifies here."""
         print(track_from_json_2.track_path.length)
     
@@ -115,7 +123,6 @@ class TestTracks(BaseWithDataCase):
         self.assertEqual(new_leaderboard[2].uid, race_third.uid)
         self.assertEqual(new_leaderboard[2].finishing_place, 3)
 
-
     def test_ratings(self):
         """Import a test GPX route.
         Create 11 Users.
@@ -177,4 +184,3 @@ class TestTracks(BaseWithDataCase):
         self.assertEqual(tracks.has_user_finished(track, user1), True)
         # Ensure that User2 has not finished the track.
         self.assertEqual(tracks.has_user_finished(track, user2), False)
-       

@@ -17,7 +17,7 @@
       "Mazda": {
         "make_uid": "mazda-GANMfBBPNc",
         "make_name": "Mazda",
-        "logo": { "filename": "mazda.png", "relative_directory": "makelogos" },
+        "logo": { "filename": "mazda.png", "relative_directory": "imports/testdata/makelogos" },
         "models": {
           "6": {
             "model_uid": "6-XGwr6e94Dn",
@@ -9588,7 +9588,7 @@
       "Toyota": {
         "make_uid": "toyota-VrjdfQNnzY",
         "make_name": "Toyota",
-        "logo": { "filename": "toyota.png", "relative_directory": "makelogos" },
+        "logo": { "filename": "toyota.png", "relative_directory": "imports/testdata/makelogos" },
         "models": {
           "86": {
             "model_uid": "86-fu8qdtgcmw",

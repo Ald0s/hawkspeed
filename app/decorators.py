@@ -9,7 +9,7 @@ from flask import request, g, redirect, url_for, render_template
 from flask_login import current_user, login_required as flask_login_required
 from werkzeug.exceptions import Unauthorized
 
-from . import db, config, models, error, races, tracks, users, vehicles
+from . import db, config, models, error, races, tracks, users, vehicles, media
 
 LOG = logging.getLogger("hawkspeed.decorators")
 LOG.setLevel( logging.DEBUG )
@@ -87,6 +87,38 @@ def account_setup_required(**kwargs):
                 LOG.warning(f"{current_user} is not yet setup. Redirecting to setup route.") # (Mobile={g.IS_MOBILE})
                 # This will require the client setup their profile.
                 raise error.AccountActionNeeded(current_user, "setup", "profile")
+            return f(*args, **kwargs)
+        return decorated_view
+    return decorator
+
+
+def get_media(**kwargs):
+    """Locate a Media item given Media UID. The Media item must not be temporary, and must also be public in nature.
+
+    Keyword arguments
+    -----------------
+    :media_uid_key: The key under which the UID for the Media to be grabbed. Default is 'media_uid'.
+    :media_output_key: The key under which the located Media should be passed. Default is 'media'.
+    :required: A boolean; True if the route should fail if the Media not found. Default is True."""
+    media_uid_key = kwargs.get("media_uid_key", "media_uid")
+    media_output_key = kwargs.get("media_output_key", "media")
+    required = kwargs.get("required", True)
+
+    def decorator(f):
+        @wraps(f)
+        def decorated_view(*args, **kwargs):
+            # Get the incoming Media UID.
+            media_uid = kwargs.get(media_uid_key, None)
+            # Attempt to find the Media.
+            media_ = media.find_media(
+                media_uid = media_uid)
+            # If no Media found, raise an error.
+            if not media_ and required:
+                """TODO: handle this properly."""
+                raise NotImplementedError("Could not find media by UID in decorator. This is not handled either.")
+            # Finally, pass the Media back via output key.
+            kwargs[media_output_key] = media_
+            # And call original function.
             return f(*args, **kwargs)
         return decorated_view
     return decorator

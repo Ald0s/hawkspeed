@@ -25,12 +25,6 @@ class PrivateDevelopmentConfig():
     pass
 
 
-class PrivateLiveDevelopmentConfig():
-    # Set your postgresql database here.
-    """TODO"""
-    SQLALCHEMY_DATABASE_URI = "postgresql+psycopg2://USERNAME:PASSWORD@localhost:5432/DATABASE"
-
-
 class PrivateProductionConfig():
     # Set your postgresql database here.
     """TODO"""

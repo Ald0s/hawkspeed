@@ -291,8 +291,8 @@ class Media(db.Model, HasUUIDMixin):
     __tablename__ = "media"
 
     id: Mapped[int] = mapped_column(primary_key = True)
-    # The User that owns this Media directly. Can't be None. If the User is deleted, the Media will also be deleted.
-    user_id: Mapped[int] = mapped_column(ForeignKey("user_.id", ondelete = "CASCADE"), nullable = False)
+    # The User that owns this Media directly. Can be None. If the User is deleted, the Media will also be deleted.
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_.id", ondelete = "CASCADE"), nullable = True)
 
     # Uri relative path from the supplied base media directory to the media item on disk; not including filename and also with trailing / removed. Ex; static/userdata/test. Can't be None.
     relative_directory: Mapped[str] = mapped_column(String(256), nullable = False)
@@ -301,7 +301,7 @@ class Media(db.Model, HasUUIDMixin):
     # The filename provided by the uploader or source file on disk; extension included and lower case. Ex; supra_burnout_video.mp4. Can't be None. Also, if original filename matches current
     # filename, this Media will be thought of as a protected internal/test media item and will raise an exception if public resource URL is sought UNLESS currently in DEBUG mode.
     original_filename: Mapped[str] = mapped_column(String(256), nullable = False)
-    # The extracted file extension, in lowercase. Ex; mp4. Can't be None.
+    # The extracted file extension, in lowercase without the dot. Ex; mp4. Can't be None.
     file_type: Mapped[str] = mapped_column(String(25), nullable = False)
     # The size of the file (bytes.) Can't be None.
     file_size: Mapped[int] = mapped_column(BigInteger(), nullable = False)
@@ -317,7 +317,7 @@ class Media(db.Model, HasUUIDMixin):
     # When the media was uploaded.
     created: Mapped[int] = mapped_column(BigInteger(), default = time.time, nullable = False)
 
-    # Irrespective of which album this Media ends up in, this tracks the original uploader/creator, which can only ever be a User. Can't be None.
+    # Irrespective of which album this Media ends up in, this tracks the original uploader/creator, which can only ever be a User. Can be None.
     user: Mapped["User"] = relationship(
         back_populates = "media_",
         uselist = False)
@@ -333,56 +333,84 @@ class Media(db.Model, HasUUIDMixin):
 
     @property
     def is_duplicate(self):
+        """Returns True if this Media is a duplicate of another."""
         return self.duplicate
 
     @property
     def is_temporary(self):
+        """Returns True if this Media is a temporary item."""
         return self.temporary
 
     @property
     def is_public(self):
+        """Returns True if this Media item is accessible via frontend media URL."""
         return self.public
 
     @property
     def is_internal(self):
+        """Returns True if this Media is an internally created item such as resources, graphics etc."""
         return self.internal
 
     @property
-    def public_resource(self):
-        """Returns the absolute path for the externally available resource, that is, if this is a public resource. This path should then be interpreted by
-        something like Nginx. Otherwise, this will raise an exception."""
-        if not self.is_public:
-            """TODO: raise a proper exception."""
-            raise NotImplementedError(f"Resource {self} requested is NOT a publicly available resource. Also this is not handled.")
-        """TODO: implement this properly."""
-        raise NotImplementedError("public_resource() not implemented.")
+    def fully_qualified_path(self):
+        """Return the full path to this Media item on disk, including the filename. This can be passed to the X-Accel-Redirect header to invoke an internal redirect to
+        the desired media item."""
+        if self.is_temporary:
+            return os.path.join(config.INSTANCE_TEMPORARY_MEDIA_PATH, self.relative_directory, self.filename)
+        else:
+            return os.path.join(config.EXTERNAL_MEDIA_BASE_PATH, self.relative_directory, self.filename)
 
     @property
-    def fully_qualified_path(self):
-        return os.path.join(config.EXTERNAL_USER_MEDIA_BASE_PATH, self.relative_directory, self.filename)
+    def directory(self):
+        """Return the fully qualified path, but only the directory; exclude the filename."""
+        return os.path.dirname(self.fully_qualified_path)
+    
+    def set_filename(self, filename):
+        """Set the current filename (including extension) of this Media item."""
+        self.filename = filename
+
+    def set_original_filename(self, original_filename):
+        """Set the original filename (as sent by User, with extension) of this Media item."""
+        self.original_filename = original_filename
+    
+    def set_file_type(self, file_type):
+        """Set file type, input will be lowercased and stripped of dots."""
+        self.file_type = file_type.lower().strip(".")
+    
+    def set_file_size(self, file_size):
+        """Set file size, in bytes."""
+        self.file_size = file_size
 
     def set_relative_directory(self, relative_directory):
         """Set this Media's relative directory."""
         self.relative_directory = relative_directory
 
-    def set_temporary(self, temporary):
-        """Set whether this Media is temporary. This can't be changed from False to True. So if the Media is currently not temporary, this
-        function will raise an exception."""
+    def set_is_temporary(self, temporary):
+        """Set whether this Media is temporary. This can't be changed from False to True. So if the Media is currently not temporary, this function will raise an
+        exception."""
         if temporary and not self.is_temporary:
             raise ValueError(f"Failed to set {self} as temporary. It is already NOT temporary.")
         self.temporary = temporary
 
-    def set_public(self, public):
+    def set_is_public(self, public):
         """Set whether this Media is public. If setting to True and the Media is still temporary, this function will fail."""
         if public and self.is_temporary:
             raise ValueError(f"Failed to set {self} as public. It is still temporary.")
         self.public = public
 
-    def set_internal(self, internal):
+    def set_is_internal(self, internal):
         """Set whether this Media is internal."""
         self.internal = internal
 
+    def set_is_duplicate(self, duplicate):
+        """Set whether this Media is a duplicate of another."""
+        self.duplicate = duplicate
+    
+    def set_user(self, user):
+        """Set the User that owns this Media item."""
+        self.user = user
 
+    
 @listens_for(Media, "after_delete")
 def del_file(mapper, connection, target):
     """Listen for each time a Media item is deleted from database. In response to this, ensure the matching resource saved to disk is also deleted."""
@@ -449,10 +477,6 @@ class SnapToRoadTrack(db.Model, EPSGWrapperMixin):
             raise ValueError(f"Failed to add pt {track_point} to a track. CRS mismatch!")
         self.track_points.append(track_point)
 
-    def remove_point(self, track_point):
-        """Remove the given SnapToRoadTrackPoint from this track."""
-        self.track_points.remove(track_point)
-    
 
 class SnapToRoadOrder(db.Model):
     """A model for containing a snap to road order, as part of the verification process for a new track. It will hold two separate references to the SnapToRoadTrack table,
@@ -462,12 +486,14 @@ class SnapToRoadOrder(db.Model):
 
     id: Mapped[int] = mapped_column(primary_key = True)
     # A foreign key to the snap to track model, for the unsnapped track points. Can't be None.
-    unsnapped_track_id: Mapped[int] = mapped_column(ForeignKey("snap_to_road_track.id"), nullable = False)
+    unsnapped_track_id: Mapped[int] = mapped_column(ForeignKey("snap_to_road_track.id", ondelete = "CASCADE"), nullable = False)
     # A foreign key to the snap to track model, for the snapped track points. Can't be None.
-    snapped_track_id: Mapped[int] = mapped_column(ForeignKey("snap_to_road_track.id"), nullable = False)
+    snapped_track_id: Mapped[int] = mapped_column(ForeignKey("snap_to_road_track.id", ondelete = "CASCADE"), nullable = False)
     # A foreign key to the track. Can't be None.
     track_id: Mapped[int] = mapped_column(ForeignKey("track.id"), nullable = False)
 
+    # The timestamp, in seconds, when this order was created.
+    created: Mapped[int] = mapped_column(BigInteger(), default = time.time, nullable = False)
     # The number of points in total to expect, set during creation phase.
     static_num_points: Mapped[int] = mapped_column(nullable = False)
     # The track. Can't be None.
@@ -476,11 +502,13 @@ class SnapToRoadOrder(db.Model):
     # The unsnapped snap to track instance. Can't be None.
     unsnapped_track: Mapped[SnapToRoadTrack] = relationship(
         uselist = False,
-        foreign_keys = [unsnapped_track_id])
+        foreign_keys = [unsnapped_track_id],
+        cascade = "all, delete")
     # The snapped snap to track instance. Can't be None.
     snapped_track: Mapped[SnapToRoadTrack] = relationship(
         uselist = False,
-        foreign_keys = [snapped_track_id])
+        foreign_keys = [snapped_track_id],
+        cascade = "all, delete")
     
     def __repr__(self):
         return f"SnapToRoadOrder<{self.track},% snapped={self.percent_snapped}>"
@@ -493,14 +521,25 @@ class SnapToRoadOrder(db.Model):
     @property
     def num_unsnapped_batches(self):
         """Return the number of batches required to snap the remaining points."""
-        return math.ceil(self.unsnapped_track.num_points / config.NUM_POINTS_PER_SNAP_BATCH)
+        return math.ceil(self.num_points_unsnapped / config.NUM_POINTS_PER_SNAP_BATCH)
+    
+    @property
+    def num_points_snapped(self):
+        """Return the number of points in the snapped track."""
+        return self.snapped_track.num_points
+    
+    @property
+    def num_points_unsnapped(self):
+        """Return the number of points that require snapping. Calculate this value by subtracting the number of snapped points from the number of
+        unsnapped points."""
+        return self.unsnapped_track.num_points - self.snapped_track.num_points
     
     @property
     def percent_snapped(self):
         """Returns the total percent snapped."""
         if self.snapped_track.num_points == 0:
             return 0
-        return int((self.snapped_track.num_points / (self.unsnapped_track.num_points + self.snapped_track.num_points)) * 100)
+        return int((self.num_points_snapped / (self.num_points_unsnapped + self.num_points_snapped)) * 100)
     
     def set_static_num_points(self, static_num_points):
         """Set the static number of points."""
@@ -747,6 +786,8 @@ class TrackPath(db.Model, MultiLineStringGeometryMixin):
     id: Mapped[int] = mapped_column(primary_key = True)
     track_id: Mapped[int] = mapped_column(ForeignKey("track.id", ondelete = "CASCADE"))
 
+    # A hash for the track path's contents; specifically its points. This is set everytime some major change is performed on the track path.
+    hash: Mapped[str] = mapped_column(String(256), nullable = False)
     # The track this path belongs to. Can't be None.
     track: Mapped["Track"] = relationship(
         back_populates = "path_",
@@ -779,6 +820,10 @@ class TrackPath(db.Model, MultiLineStringGeometryMixin):
             return None
         last_linestring = self.multi_linestring.geoms[len(self.multi_linestring.geoms)-1]
         return geometry.Point(last_linestring.coords[len(last_linestring.coords)-1])
+    
+    def set_hash(self, hash):
+        """Set this track path's hash."""
+        self.hash = hash
 
 
 class TrackComment(db.Model):
@@ -898,7 +943,7 @@ class Track(db.Model, PointGeometryMixin):
         cascade = "all, delete")
 
     def __repr__(self):
-        return f"Track<{self.name},v={self.verified}>"
+        return f"Track<{self.name},snapped={self.is_snapped_to_roads},v={self.is_verified}>"
 
     @hybrid_property
     def uid(self):
@@ -1178,10 +1223,16 @@ class VehicleMake(db.Model):
     __tablename__ = "vehicle_make"
 
     uid: Mapped[str] = mapped_column(String(128), primary_key = True)
+    # The ID of a Media item that represents this make's logo. This can be nullable, and will cascade on delete.
+    logo_id: Mapped[int] = mapped_column(ForeignKey("media.id", ondelete = "CASCADE"), nullable = True)
 
     # The name of this vehicle make. Can't be None; this is also unique.
     name: Mapped[str] = mapped_column(String(48), nullable = False)
-    
+
+    # The logo of this vehicle make. Can be None, set cascade to delete.
+    logo: Mapped[Media] = relationship(
+        uselist = False,
+        cascade = "all, delete")
     # A dynamic relationship to all models associated with this make- no filtration on type.
     models_: Mapped[List["VehicleModel"]] = relationship(
         back_populates = "make",
@@ -1297,7 +1348,7 @@ class VehicleStock(db.Model):
     # The displacement, in CC. Can be None.
     displacement: Mapped[int] = mapped_column(nullable = True)
     # The induction type. Can be None.
-    induction_type: Mapped[str] = mapped_column(nullable = True)
+    induction: Mapped[str] = mapped_column(nullable = True)
     # The fuel type. Can be None.
     fuel_type: Mapped[str] = mapped_column(nullable = True)
 

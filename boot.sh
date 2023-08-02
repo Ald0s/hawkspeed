@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# Set app host/domain information.
+export SERVER_NAME=""
+# Set public media base path. This should always be an absolute path.
+EXTERNAL_MEDIA_BASE_PATH=""
 # Export production environment.
 export APP_ENV=Production
 # Build the basics of this app.

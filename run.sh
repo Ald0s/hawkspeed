@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# Set app host/domain information.
+export SERVER_NAME="0.0.0.0:5000"
 # Set app environment as development. This will use an sqlite database.
 export APP_ENV=Development
 

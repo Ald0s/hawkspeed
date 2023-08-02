@@ -2,10 +2,17 @@ import os
 from instance import settings as private
 
 
+def make_dir(path):
+    try:
+        os.makedirs(os.path.join(os.getcwd(), path))
+    except OSError as o:
+        pass
+
+
 class CeleryConfig():
     # A boolean; set to True to enable Google Maps API functionality. Note; setting this to False will skip the 'snap to roads' verification step that
     # is usually part of the new track process.
-    USE_GOOGLE_MAPS_API = False
+    USE_GOOGLE_MAPS_API = True
     # The base URL for the Snap To Roads API.
     SNAP_TO_ROADS_BASE_URL = "https://roads.googleapis.com/v1/snapToRoads?"
     # The number of points that can be sent in a single batch to Roads API snap to road. Maximum is 100 as per API docs.
@@ -22,7 +29,7 @@ class SocketConfig():
 
 class TrackConfigurationMixin():
     # A boolean; set to True to require snap-to-roads be executed prior to verification of a new Track.
-    REQUIRE_SNAP_TO_ROADS = False
+    REQUIRE_SNAP_TO_ROADS = True
     # A boolean; set to True to require admin approvals for new tracks, after they've been snapped to road.
     REQUIRE_ADMIN_APPROVALS = False
 
@@ -48,38 +55,35 @@ class GeospatialConfigurationMixin():
 
 
 class BaseConfig(private.PrivateBaseConfig, RaceConfigurationMixin, TrackConfigurationMixin, GeospatialConfigurationMixin, SocketConfig, CeleryConfig):
-    TESTING = False
-    DEBUG = False
     SQLALCHEMY_SESSION_OPTS = {}
     SQLALCHEMY_ENGINE_OPTS = {}
-    ALLOW_TEST_ROUTES = False
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+    
     # Management can be False by default.
     POSTGIS_MANAGEMENT = False
 
-    #HOST = "0.0.0.0"
-    #PORT = 5000
-    #SERVER_NAME = f"localhost.localdomain:{PORT}"
-    #SERVER_NAME = f"127.0.0.1:{PORT}"
-    SERVER_URL = "http://192.168.0.253:5000"
+    SERVER_VERSION_TEXT = "0.01.05"
+    SERVER_VERSION_CODE = 13
 
-    SERVER_VERSION_TEXT = "0.01.04"
-    SERVER_VERSION_CODE = 12
+    ACCEPTABLE_MEDIA_TYPES = ["jpg", "png", "gif"]
 
     # Streaming configuration.
     MAX_CONTENT_LENGTH = 16 * 1024 * 1024 # 16 MB
     STREAM_CHUNK_SZ = 10 * 1024 * 1024 # 10 MB
 
-    """TODO: this configuration value should be set from the outside ideally."""
-    EXTERNAL_USER_MEDIA_BASE_PATH = "instance/userdata"
+    # The base relative URL for Media content that Users are allowed to access. Ideally, this should be set by configuration that spawns the server and should correspond with
+    # whatever routing rules you've applied to your Nginx configuration. Whenever a Media item is serialised, its filename on disk will be appended to this configuration value
+    # and that result will by sent to the User. When the User attempts to load the absolute URL, which will be the current domain + this path + the Media item's filename, this
+    # should always invoke a route to ensure the User has access, which then will return an X-Accel-Redirect if Production/Live or send_from_directory otherwise...
+    PUBLIC_RESOURCE_PATH = os.path.join("cdn", "m")
 
     # Some import directories.
     ERRORS_PATH = "error"
-    IMPORTS_PATH = "imports"
     INSTANCE_PATH = "instance"
-    # Some directories.
-    GPX_ROUTES_DIR = os.path.join(IMPORTS_PATH, "gpx-routes")
-    TESTDATA_GPX_ROUTES_DIR = os.path.join(IMPORTS_PATH, "gpx-routes", "test-routes")
+    
+    # Storage for temporary Media items. For all environments, this is stored within our local instance directory.
+    INSTANCE_TEMPORARY_MEDIA_PATH = os.path.join(INSTANCE_PATH, "temp_media")
+
     # What timezone should be used to report dates across the app irrespective of their relevant locations? Set to None to disable.
     GLOBAL_REPORTING_TIMEZONE = None
     # The amount of time, in seconds, until a new unverified account expires and will be deleted.
@@ -98,33 +102,30 @@ class BaseConfig(private.PrivateBaseConfig, RaceConfigurationMixin, TrackConfigu
     PAGE_SIZE_VEHICLES = 25
 
     def __init__(self):
-        self.make_dirs()
-
-    def make_dirs(self):
-        def make_dir(path):
-            try:
-                os.makedirs(os.path.join(os.getcwd(), path))
-            except OSError as o:
-                pass
-        make_dir(self.IMPORTS_PATH)
+        make_dir(self.INSTANCE_PATH)
+        make_dir(self.INSTANCE_TEMPORARY_MEDIA_PATH)
         make_dir(self.ERRORS_PATH)
-        make_dir(self.EXTERNAL_USER_MEDIA_BASE_PATH)
 
 
 class TestConfig(private.PrivateTestConfig, BaseConfig):
     FLASK_ENV = "development"
     FLASK_DEBUG = True
-    PRESERVE_CONTEXT_ON_EXCEPTION = False
-    TESTING = True
-    DEBUG = True
+    FLASK_PREFERRED_URL_SCHEME = "http"
+    FLASK_TESTING = True
+
     # Required whenever using SQLite.
     POSTGIS_MANAGEMENT = True
 
     #CELERY_ALWAYS_EAGER = True
     #TEST_CELERY_TASKS = False # Should celery tasks be tested? This will be done eager as per CELERY_ALWAYS_EAGER but still...
 
+    # Imports for test environment are found within a testdata specific imports subdirectory.
     IMPORTS_PATH = os.path.join("imports", "testdata")
-    # Some directories.
+    # An absolute path to the base directory in which all publicly accessible Media items should be stored after being claimed/read. For non-production environments, this is
+    # set within configuration only and can be found within the instance directory.
+    EXTERNAL_MEDIA_BASE_PATH = os.path.join(os.getcwd(), "instance", "media", "test")
+
+    # Some specific import directories.
     GPX_ROUTES_DIR = os.path.join(IMPORTS_PATH, "gpx-routes")
     TESTDATA_GPX_ROUTES_DIR = os.path.join(IMPORTS_PATH, "gpx-routes", "test-routes")
 
@@ -139,22 +140,32 @@ class TestConfig(private.PrivateTestConfig, BaseConfig):
     PAGE_SIZE_LEADERBOARD = 5
 
     def __init__(self):
-        super().make_dirs()
+        super().__init__()
+        make_dir(self.EXTERNAL_MEDIA_BASE_PATH)
+        make_dir(self.IMPORTS_PATH)
+        make_dir(self.GPX_ROUTES_DIR)
+        make_dir(self.TESTDATA_GPX_ROUTES_DIR)
 
 
 class DevelopmentConfig(private.PrivateDevelopmentConfig, BaseConfig):
     FLASK_ENV = "development"
     FLASK_DEBUG = True
-    DEBUG = True
+    FLASK_PREFERRED_URL_SCHEME = "http"
+    FLASK_TESTING = False
+
     #CELERY_ALWAYS_EAGER = True
     # Required whenever using SQLite.
     POSTGIS_MANAGEMENT = True
 
     SQLALCHEMY_DATABASE_URI = "sqlite:///hawkspeed.db"
 
-    # Set imports directory to the test data subdirectory within imports. This must contain our test tarballs.
+    # Imports for development environment are found within a testdata specific imports subdirectory.
     IMPORTS_PATH = os.path.join("imports", "testdata")
-    # Some directories.
+    # An absolute path to the base directory in which all publicly accessible Media items should be stored after being claimed/read. For non-production environments, this is
+    # set within configuration only and can be found within the instance directory.
+    EXTERNAL_MEDIA_BASE_PATH = os.path.join(os.getcwd(), "instance", "media", "development")
+
+    # Some specific import directories.
     GPX_ROUTES_DIR = os.path.join(IMPORTS_PATH, "gpx-routes")
     TESTDATA_GPX_ROUTES_DIR = os.path.join(IMPORTS_PATH, "gpx-routes", "test-routes")
 
@@ -162,26 +173,27 @@ class DevelopmentConfig(private.PrivateDevelopmentConfig, BaseConfig):
     PAGE_SIZE_LEADERBOARD = 5
 
     def __init__(self):
-        super().make_dirs()
-
-
-class LiveDevelopmentConfig(private.PrivateLiveDevelopmentConfig, BaseConfig):
-    FLASK_ENV = "development"
-    FLASK_DEBUG = True
-    DEBUG = True
-    #CELERY_ALWAYS_EAGER = True
-    # Management not required when not using SQLite.
-    POSTGIS_MANAGEMENT = False
-
-    def __init__(self):
-        super().make_dirs()
+        super().__init__()
+        make_dir(self.EXTERNAL_MEDIA_BASE_PATH)
+        make_dir(self.IMPORTS_PATH)
+        make_dir(self.GPX_ROUTES_DIR)
+        make_dir(self.TESTDATA_GPX_ROUTES_DIR)
 
 
 class ProductionConfig(private.PrivateProductionConfig, BaseConfig):
+    FLASK_DEBUG = False
+    FLASK_TESTING = False
     FLASK_ENV = "production"
-
+    FLASK_PREFERRED_URL_SCHEME = "https"
+    
     # Management not required when not using SQLite.
     POSTGIS_MANAGEMENT = False
+
+    # Imports for production can be found in the imports directory itself.
+    IMPORTS_PATH = "imports"
+
+    # Some specific import directories.
+    GPX_ROUTES_DIR = os.path.join(IMPORTS_PATH, "gpx-routes")
 
     # A realistic proxy configuration now that should match your architecture.
     FORWARDED_FOR = 2
@@ -191,4 +203,6 @@ class ProductionConfig(private.PrivateProductionConfig, BaseConfig):
     FORWARDED_PREFIX = 0
 
     def __init__(self):
-        super().make_dirs()
+        super().__init__()
+        make_dir(self.IMPORTS_PATH)
+        make_dir(self.GPX_ROUTES_DIR)

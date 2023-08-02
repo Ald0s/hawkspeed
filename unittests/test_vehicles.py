@@ -35,6 +35,8 @@ class TestVehicles(BaseWithDataCase):
         self.assertEqual(len(all_vehicle_makes), 2)
         # Filter all vehicle makes to just Toyota.
         toyota = next(filter(lambda mk: mk.name == "Toyota", all_vehicle_makes))
+        # Ensure logo is not None.
+        self.assertIsNotNone(toyota.logo)
         # Now, get all types within this make, by supplying the make UID.
         toyota_types = vehicles.search_vehicles(
             make_uid = toyota.uid).all()

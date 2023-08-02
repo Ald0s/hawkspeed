@@ -3,18 +3,18 @@ import logging
 import os
 import gpxpy
 import hashlib
-
+import geojson
 import pyproj
 import shapely
-from geoalchemy2 import shape
 
+from geoalchemy2 import shape
 from flask_login import current_user
 from sqlalchemy import func, asc, desc, delete, and_
 from sqlalchemy.orm import with_expression
 from marshmallow import fields, Schema, post_load, EXCLUDE
 
 from .compat import insert
-from . import db, config, models, error
+from . import db, config, models, factory
 
 LOG = logging.getLogger("hawkspeed.tracks")
 LOG.setLevel( logging.DEBUG )
@@ -41,6 +41,27 @@ class TrackInspectionFailed(Exception):
         self.error_code = error_code
         self.extra_info = kwargs.get("extra_info", None)
 
+
+def calculate_track_path_hash(track_path, **kwargs) -> str:
+    """Calculate a blake2b hash of this track's path as it exists right now. This will iterate all points stored in the multilinestring that represents the path, and will
+    return the hexdigest of this process.
+    
+    Arguments
+    ---------
+    :track_path: An instance of TrackPath for which a hash is desired."""
+    try:
+        # Create a new blake2b instance.
+        path_b2b = hashlib.blake2b()
+        # Iterate all line strings in track path's multilinestring.
+        for linestring in track_path.multi_linestring.geoms:
+            # Iterate all points in this linestring, and update the hash with each.
+            for x, y in linestring.coords:
+                path_b2b.update(f"{x},{y}".encode("utf-8"))
+        # Now, calculate the hexdigest for this and return that.
+        return path_b2b.hexdigest().lower()
+    except Exception as e:
+        raise e
+    
 
 def tracks_query(**kwargs):
     """Assemble a query for a list of tracks matching the given criteria. If no criteria is valid, this function will raise an exception. All tracks will be order in
@@ -467,6 +488,10 @@ class LoadedTrack():
         fwd_azimuth, back_azimuth, distance = geodesic.inv(first_track_point.longitude, first_track_point.latitude, second_track_point.longitude, second_track_point.latitude)
         # Save the forward azimuth.
         self.start_point_bearing = fwd_azimuth
+        # If track type is -1, determine, we will now attempt to geometrically determine what type of track is being presented to us.
+        if self.track_type == -1:
+            LOG.debug(f"Track type for {self.name} is DETERMINE. We will attempt to find out the exact type...")
+            self._attempt_find_track_type()
 
     def get_multi_linestring(self):
         """Get a multilinestring representing the entire track. Each linestring itself represents a single track segment."""
@@ -474,6 +499,21 @@ class LoadedTrack():
         transform_func = self._transformer.transform
         # Now, for each segment, which is a LoadedTrackSegment, get the Polygon transformed via transform_func.
         return shapely.geometry.MultiLineString([segment.get_linestring(transform_func) for segment in self.segments])
+    
+    def _attempt_find_track_type(self):
+        """Attempt to determine the type of track presented here."""
+        try:
+            # Get a multi linestring.
+            mls = self.get_multi_linestring()
+            # Now, if this is a ring, we have a circuit. Else, a sprint.
+            if mls.is_ring:
+                LOG.debug(f"Detected circuit type track being read...")
+                raise NotImplementedError("HawkSpeed does not currently support circuits.")
+            else:
+                LOG.debug(f"Detected sprint type track being read...")
+                self.track_type = models.Track.TYPE_SPRINT
+        except Exception as e:
+            raise e
 
 
 class LoadedUserTrack(LoadedTrack):
@@ -525,8 +565,8 @@ class CreatedUserTrack():
     def from_created_track(cls, user, created_track, **kwargs):
         """Build a created user track from the given User and created track instances."""
         return CreatedUserTrack(user, created_track.track, created_track.track_path)
-
-
+    
+    
 def create_user_track_from_json(user, new_track_json, **kwargs) -> CreatedUserTrack:
     """Create a new Track given a JSON object, but verify the integrity of the track prior to creating it, since it was recorded by a User. This
     should be called when a User intends to create a new track, and in this case, providing a User is mandatory. This function will not check to
@@ -634,8 +674,8 @@ def create_track_from_gpx(filename, **kwargs) -> CreatedTrack:
     Keyword arguments
     -----------------
     :relative_dir: A directory relative to the working directory. By default, the configured GPX_ROUTES_DIR.
-    :is_verified: Whether this track is verified, that is, it does not need admin approval. Default is True.
-    :is_snapped_to_roads: Whether this track is snapped to roads. Default is True.
+    :is_verified: Whether this track is verified, that is, it does not need admin approval. Default is True, which will be AND'd with track.
+    :is_snapped_to_roads: Whether this track is snapped to roads. Default is True, which will be AND'd with track.
     :intersection_check: Whether to run the track intersection check at all. Default is True.
     
     Returns
@@ -656,21 +696,37 @@ def create_track_from_gpx(filename, **kwargs) -> CreatedTrack:
         # Read the contents of the file, and load a GPX instance.
         with open(gpx_absolute_path, "r") as f:
             gpx_file_contents = f.read()
-            gpx = gpxpy.parse(gpx_file_contents)
-        # Now, load the actual schema. We'll do this first by reading all GPX data and creating JSON compatible objects from it all.
-        """TODO: use an actual track type here, figure out how to set it in GPX files."""
-        new_track_json = {
-            "name": gpx.tracks[0].name,
-            "description": gpx.tracks[0].description,
-            "track_type": 0,
-            "segments": [dict(points = [{
-                    "latitude": track_point.latitude,
-                    "longitude": track_point.longitude
-                } for track_point in segment.points
-            ]) for segment in gpx.tracks[0].segments]}
-        # We'll now return the result of loading this JSON dictionary from JSON.
-        return create_track_from_json(new_track_json,
-            is_verified = is_verified, is_snapped_to_roads = is_snapped_to_roads, intersection_check = intersection_check)
+            gpxobj = gpxpy.parse(gpx_file_contents)
+            # We only support a single track right now, so raise if there's more than 1.
+            if len(gpxobj.tracks) > 1:
+                raise NotImplementedError("create_track_from_gpx failed because there's more than 1 track in file. Only 1 is supported right now.")
+        # Now, determine if file needs conversion.
+        if gpxobj.creator == "hawkspeed":
+            # Get the one track.
+            gpxtrack = gpxobj.tracks[0]
+            # Convert all extensions to a dictionary.
+            track_extensions = dict((ext.tag, ext,) for ext in gpxtrack.extensions)
+            # Get all applicable data points, supplemented with values given above.
+            track_type = int(track_extensions.get("type").text)
+            # Snapped to roads and verified are both required.
+            is_snapped_to_roads_= bool(int(track_extensions.get("snapped").text)) and is_snapped_to_roads
+            is_verified_ = bool(int(track_extensions.get("verified").text)) and is_verified
+            # Now we can load a dictionary capable of being read by the loaded track schema.
+            new_track_d = {
+                "name": gpxtrack.name,
+                "description": gpxtrack.description,
+                "track_type": track_type,
+                "segments": [dict(points = [{
+                        "latitude": track_point.latitude,
+                        "longitude": track_point.longitude
+                    } for track_point in segment.points
+                ]) for segment in gpxtrack.segments]}
+            # We'll now return the result of loading this JSON dictionary from JSON.
+            return create_track_from_json(new_track_d,
+                is_verified = is_verified_, is_snapped_to_roads = is_snapped_to_roads_, intersection_check = intersection_check)
+        else:
+            # This file needs conversion to hawkspeed authorship.
+            raise NotImplementedError(f"GPX file with creator '{gpxobj.creator}' is not yet supported!")
     except Exception as e:
         raise e
 
@@ -714,6 +770,9 @@ def create_track(loaded_track, **kwargs) -> CreatedTrack:
         if intersection_check:
             # Verify the track path does not intersect any existing path.
             _ensure_track_no_interference(track_path)
+        # Calculate a hash for the track's path, then set that on the path instance.
+        path_b2b_hash = calculate_track_path_hash(track_path)
+        track_path.set_hash(path_b2b_hash)
         # Create a new Track instance.
         new_track = models.Track(
             track_hash = loaded_track.track_hash)
@@ -787,5 +846,105 @@ def _ensure_track_no_interference(track_path, **kwargs):
         if len(intersecting_tracks) > 0:
             raise TrackInspectionFailed("start-point-too-close")
         # Silently succeed.
+    except Exception as e:
+        raise e
+
+
+def export_track(track, format = "gpx", **kwargs):
+    """Export the given track to the specified format. GPX and GeoJSON are both supported.
+    
+    Arguments
+    ---------
+    :track: The track to export; an instance of Track.
+    :format: The format to export the track in. The following are supported; 'gpx' or 'geojson'. By default, GPX will be used.
+    
+    Keyword arguments
+    -----------------
+    :filename: The name of the resulting file. By default, the track's name, in lowercase, will be used.
+    :relative_destination: A directory, relative to working directory, to create the resulting file.
+    :overwrite: True if an existing file at this location should be overwritten if found. By default, False."""
+    try:
+        filename = kwargs.get("filename", None)
+        relative_destination_dir = kwargs.get("relative_destination", "")
+        overwrite = kwargs.get("overwrite", False)
+
+        valid_formats = ["gpx", "geojson"]
+        if not format.lower() in valid_formats:
+            raise Exception(f"Failed to export {track}, the following format is not supported; '{format}'")
+        # Construct a filename for the resulting file, plus extension. Ex; Yarra Boulevard.gpx
+        final_filename = filename or f"{track.name}.{format.lower()}"
+        # Construct relative destination path.
+        relative_destination = os.path.join(relative_destination_dir, final_filename)
+        # Construct absolute destination path.
+        absolute_destination = os.path.join(os.getcwd(), relative_destination)
+        # Now, if a file already exists but we will not overwrite, fail.
+        if os.path.isfile(absolute_destination) and not overwrite:
+            raise Exception(f"Failed to export track {track}, a destination file of the same name ({relative_destination}) already exists.")
+        # Setup a loaded track instance for this track.
+        loaded_track = LoadedTrack(
+            name = track.name, description = track.description, track_type = track.track_type, segments = [LoadedTrackSegment(points = [LoadedPoint(longitude = gpt[0], latitude = gpt[1]) for gpt in geodetic_linestring.coords]) for geodetic_linestring in track.path.geodetic_multi_linestring.geoms])
+        # Now, serialise the track to either GeoJSON or GPX.
+        if format == "geojson":
+            # Now, convert this track to a GeoJSON feature.
+            feature = _track_to_geojson(track)
+            # Setup a feature collection.
+            feature_collection = geojson.FeatureCollection(
+                features = [feature])
+            # Set destination content to the GeoJSON, pretty print.
+            destination_content = geojson.dumps(feature_collection,
+                indent = 4)
+        elif format == "gpx":
+            # Export as GPX. Create a new GPX object from loaded track, whose naming aligns with GPX naming conv.
+            gpx_result = factory.make_gpx_from("hawkspeed", loaded_track.name, loaded_track.description, loaded_track.segments,
+                is_snapped = track.is_snapped_to_roads, is_verified = track.is_verified, track_type = track.track_type)
+            # Set destination content to pretty print XML for the gpx result.
+            destination_content = gpx_result.to_xml(prettyprint = True)
+        else:
+            raise Exception(f"Failed to export {track}, the following format is not supported; '{format}'")
+        # Now, open a file to absolute destination in write mode (which will overwrite) then write the destination content.
+        with open(absolute_destination, "w") as w:
+            w.write(destination_content)
+    except Exception as e:
+        raise e
+
+
+def _track_to_geojson(track, **kwargs) -> geojson.Feature:
+    """Convert the given Track to a GeoJSON feature collection. This function will create a new feature collection and set the name and description in the resulting
+    properties object. The Track multilinestring will be serialised in geodetic format.
+    
+    Arguments
+    ---------
+    :track: The Track to convert to GeoJSON.
+
+    Keyword arguments
+    -----------------
+    :stroke: The stroke colour for the track, by default #FF0000 is used.
+    :stroke_width: The stroke width for the track, by default 2 is used.
+    :fill: The fill colour for the track, by default #FF0000 is used.
+
+    Returns
+    -------
+    A Feature."""
+    try:
+        stroke = kwargs.get("stroke", "#FF0000")
+        stroke_width = kwargs.get("stroke_width", 2)
+        fill = kwargs.get("fill", "#FF0000")
+
+        # Create a properties dictionary.
+        properties_d = {
+            "name": track.name,
+            "description": track.description,
+            "stroke": stroke,
+            "stroke-width": stroke_width,
+            "stroke-opacity": 1,
+            "fill": fill,
+            "fill-opacity": 0.5}
+        # Setup a multilinestring feature for each linestring in track mls.
+        multilinestring = geojson.MultiLineString([geojson.LineString([(pt[0], pt[1],) for pt in ls.coords]) for ls in track.path.geodetic_multi_linestring.geoms])
+        # Create a new Feature here with the given properties and set geometry to the multilinestring.
+        feature = geojson.Feature(
+            geometry = multilinestring, properties = properties_d)
+        # Return.
+        return feature
     except Exception as e:
         raise e

@@ -49,7 +49,10 @@ def create_app():
         x_host = config.FORWARDED_HOST,
         x_port = config.FORWARDED_PORT,
         x_prefix = config.FORWARDED_PREFIX)
+    # Load config from our default configurations in object.
     app.config.from_object(config)
+    # Then, load config from prefixed environment vars, to overwrite those set there.
+    app.config.from_prefixed_env()
     app.url_map.strict_slashes = False
     db.init_app(app)
     migrate.init_app(app, db)

@@ -2,8 +2,11 @@
 import logging
 import os
 import random
-from datetime import datetime, date
+import gpxpy
+import xml.etree.ElementTree as ET
 
+from typing import List
+from datetime import datetime, date
 from app import db, config, models, users, vehicles, error
 
 LOG = logging.getLogger("hawkspeed.factory")
@@ -122,3 +125,80 @@ def create_user(email_address, password, **kwargs) -> models.User:
     LOG.debug(f"New account created; {new_user}")
     db.session.add(new_user)
     return new_user
+
+
+def make_gpx_from(creator, track_name, track_description, track_segments, **kwargs) -> gpxpy.gpx.GPX:
+    """"""
+    try:
+        is_snapped = kwargs.get("is_snapped", False)
+        is_verified = kwargs.get("is_verified", False)
+        track_type = kwargs.get("track_type", -1)
+        
+        # Create a new GPX, with hawkspeed as the creator.
+        hawkspeed_gpx = gpxpy.gpx.GPX()
+        hawkspeed_gpx.creator = creator
+        hawkspeed_gpx.version = "1.1"
+        # Now, create a new track, and add it to our GPX.
+        hsgpx_track = gpxpy.gpx.GPXTrack()
+        hawkspeed_gpx.tracks.append(hsgpx_track)
+        # Set information about the track.
+        hsgpx_track.name = track_name
+        hsgpx_track.description = track_description
+        # Now, create a new element for each extension.
+        type_ext_elem = ET.Element("type")
+        type_ext_elem.text = str(track_type)
+        snapped_ext_elem = ET.Element("snapped")
+        snapped_ext_elem.text = str(int(is_snapped))
+        verified_ext_elem = ET.Element("verified")
+        verified_ext_elem.text = str(int(is_verified))
+        # Append all to the HS Track.
+        hsgpx_track.extensions.append(type_ext_elem)
+        hsgpx_track.extensions.append(snapped_ext_elem)
+        hsgpx_track.extensions.append(verified_ext_elem)
+        # Now, only a single segment is allowed (for now), so fail if there's more than 1.
+        if len(track_segments) > 1:
+            """TODO: support multiple segs."""
+            raise NotImplementedError("failed to convert from GPX studio GPX format; we only support ONE track segment for now.")
+        # Get that single seg.
+        track_segment_ = track_segments[0]
+        # Create a segment for our new track, too. Append it to our HS Track.
+        hsgpx_segment = gpxpy.gpx.GPXTrackSegment()
+        hsgpx_track.segments.append(hsgpx_segment)
+        # Now, iterate all track points, creating a new point from each and add them all to the segment.
+        for track_point_ in track_segment_.points:
+            hsgpx_trackpoint = gpxpy.gpx.GPXTrackPoint(track_point_.latitude, track_point_.longitude)
+            hsgpx_segment.points.append(hsgpx_trackpoint)
+            """TODO: we can add further detail about the point here."""
+        return hawkspeed_gpx
+    except Exception as e:
+        raise e
+    
+
+def convert_to_hawkspeed_gpx(gpx, **kwargs) -> List[gpxpy.gpx.GPX]:
+    """Convert from a GPX authored by a third party entity, to a GPX that is understood exclusively by HawkSpeed."""
+    try:
+        hsgpx = []
+        if gpx.creator == "https://gpx.studio":
+            # Iterate all tracks in given GPX.
+            for track_ in gpx.tracks:
+                # Never snapped if it comes from GPX studio.
+                is_snapped = False
+                # Always verified if it comes from GPX studio, as we created it.
+                is_verified = True
+                # Track type from GPX studio is always -1 (determine.)
+                track_type = -1
+                
+                if not track_.name:
+                    raise ValueError("Failed to convert a GPX to HawkSpeed format! A name is not provided, but one is required!")
+                if not track_.description:
+                    raise ValueError("Failed to convert a GPX to HawkSpeed format! A description is not provided, but one is required!")
+                # Create a new hawkspeed GPX from all the given information.
+                hawkspeed_gpx = make_gpx_from("hawkspeed", track_.name, track_.description, track_.segments,
+                    is_snapped = is_snapped, is_verified = is_verified, track_type = track_type)
+                # Append the hawkspeed GPX to our hsgpx list.
+                hsgpx.append(hawkspeed_gpx)
+        else:
+            raise NotImplementedError(f"Failed to convert GPX with creator {gpx.creator} to HawkSpeed compat. Unrecognised creator.")
+        return hsgpx
+    except Exception as e:
+        raise e

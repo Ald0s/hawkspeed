@@ -18,14 +18,14 @@ from app import create_app, db, models, config, factory, error, compat, world, r
 class BaseCase(TestCase):
     @classmethod
     def tearDownClass(cls):
-        """Delete all test userdata items when tests are complete within a class."""
-        """TODO: use config.EXTERNAL_USER_MEDIA_BASE_PATH instead to get to our current userdata path for clearing."""
-        '''userdata_directory = os.path.join(os.getcwd(), config.USERDATA_PATH)
-        userdata_files = os.listdir(userdata_directory)
-        for file in userdata_files:
-            file_to_delete = os.path.join(userdata_directory, file)
-            # Delete the file.
-            os.remove(file_to_delete)'''
+        """Delete all test media items from the temp media and normal media directories."""
+        target_directories = [config.EXTERNAL_MEDIA_BASE_PATH, config.INSTANCE_TEMPORARY_MEDIA_PATH]
+        for target_directory in target_directories:
+            target_files = os.listdir(target_directory)
+            for filename in target_files:
+                file_to_delete = os.path.join(target_directory, filename)
+                # Delete the file.
+                os.remove(file_to_delete)
 
     def setUp(self):
         db.create_all()

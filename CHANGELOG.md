@@ -92,3 +92,17 @@
 
 ## Version 0.01.04
 * Wrote stub tests for UserViewModel and VehicleViewModel.
+
+## Version 0.01.05
+* Created separate format for HawkSpeed specific GPX XML - and a converter to centralise transformation,
+* Added track export management function for saving tracks as they exist at that time - useful for saving snapped to roads tracks,
+* Added management function for invoking snap-to-roads orders on tracks,
+* Implemented error management system & result type for snap-to-roads,
+* Added cascades to source & destination snap to roads track so both are deleted when parent order is deleted,
+* Added management function to convert a track to GeoJSON,
+* Added media module to handle the creation, storage, deletion and retrieval of Media resource,
+* Added vehicle make logos,
+* Cleaned up configuration values; removing reundant ones and relying solely on environment variables for production environments,
+* Made LiveDevelopment environment redundant for this project,
+* Fixed induction type being excluded from serialised VehicleStock,
+* Added a track path hash, to let clients quickly differentiate between versions of track path saving unnecessary recomps.

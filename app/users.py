@@ -37,3 +37,19 @@ def find_existing_user(**kwargs) -> models.User:
         return user_q.first()
     except Exception as e:
         raise e
+
+
+def update_profile_media(media, **kwargs):
+    """"""
+    try:
+        raise NotImplementedError()
+    except Exception as e:
+        raise e
+
+
+def update_cover_media(media, **kwargs):
+    """"""
+    try:
+        raise NotImplementedError()
+    except Exception as e:
+        raise e
